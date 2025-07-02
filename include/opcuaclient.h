@@ -2,12 +2,14 @@
 #define OPCUACLIENT_H
 
 #include <open62541/client.h>
+#include <open62541/client_config_default.h>
 #include <open62541/plugin/log_stdout.h>
 #include <vector>
 #include <map>
 #include <set>
 #include <memory>
 #include <string>
+#include <iostream>
 
 #pragma once
 
@@ -18,7 +20,7 @@ public:
         client_ = UA_Client_new();
 
         UA_ClientConfig* config = UA_Client_getConfig(client_);
-        *config->logging = UA_Log_Stdout_withLevel(UA_LOGLEVEL_FATAL);
+        UA_ClientConfig_setDefault(UA_Client_getConfig(client_));
 
         UA_Client_run_iterate(client_, 100);
 
@@ -36,6 +38,7 @@ public:
             int i;
             unsigned int u;
             float f;
+            bool b;
         };
         std::string s;
         std::string type;
@@ -69,7 +72,7 @@ private:
     UA_Client* client_;
     bool is_connected_{false};
     bool should_run_{false};
-    const std::set<std::string> types_ = { "INT", "UINT", "WORD", "DINT", "UDINT", "DWORD", "REAL" };
+    const std::set<std::string> types_ = { "INT", "UINT", "WORD", "DINT", "UDINT", "DWORD", "REAL", "BOOL", "STRING"};
 
 private:
     void Stop();

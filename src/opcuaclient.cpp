@@ -5,7 +5,9 @@ bool OpcUaClient::Connect() {
 
     char* opc_url = strdup(url.c_str());
     UA_StatusCode status_code = UA_Client_connect(client_, opc_url);
+    std::cerr << "\nurl: " << opc_url;
     free(opc_url);
+
 
     is_connected_ = status_code == UA_STATUSCODE_GOOD;
     return is_connected_;
@@ -195,61 +197,63 @@ void OpcUaClient::Write(WriteConfig& config) {
 }
 
 void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
-    int data_count = configs.size();
+    size_t data_count = configs.size();
 
-    UA_WriteRequest request;
-    UA_WriteRequest_init(&request);
-    UA_WriteValue items[data_count];
+    // Динамический массив для WriteValue
+    std::vector<UA_WriteValue> items;
+    items.reserve(data_count);
 
-    int j = 0;
-    for (int i = 0; i < data_count; i++) {
-        if (auto iterator = types_.find(configs[i].type) != types_.end() && configs[i].allowed) {
+    for (size_t i = 0; i < data_count; i++) {
+        // Проверка типа и allowed
+        if (types_.find(configs[i].type) != types_.end() && configs[i].allowed) {
             configs[i].allowed = false;
 
-            UA_WriteValue_init(&items[j]);
+            UA_WriteValue item;
+            UA_WriteValue_init(&item);
 
-            items[j].nodeId = UA_NODEID_STRING_ALLOC(1, configs[i].node_id.c_str());
-            items[j].attributeId = UA_ATTRIBUTEID_VALUE;
+            item.nodeId = UA_NODEID_STRING_ALLOC(1, configs[i].node_id.c_str());
+            item.attributeId = UA_ATTRIBUTEID_VALUE;
+            item.value.hasValue = true;
 
+            std::cout << "\n\nNode: " << configs[i].node_id << " type: " << configs[i].type << " value: " << configs[i].value.i;
+
+            // Заполняем значение в зависимости от типа
             if (configs[i].type == "INT") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_INT16];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.i;
+                UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.i, &UA_TYPES[UA_TYPES_INT16]);
+            } else if (configs[i].type == "DINT") {
+                UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.i, &UA_TYPES[UA_TYPES_INT32]);
+            } else if (configs[i].type == "BOOL") {
+               UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.b, &UA_TYPES[UA_TYPES_BOOLEAN]);
+            } else if (configs[i].type == "UINT" || configs[i].type == "WORD") {
+                UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.u, &UA_TYPES[UA_TYPES_UINT16]);
+            } else if (configs[i].type == "UDINT" || configs[i].type == "DWORD") {
+                UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.u, &UA_TYPES[UA_TYPES_UINT32]);
+            } else if (configs[i].type == "REAL") {
+                UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.f, &UA_TYPES[UA_TYPES_FLOAT]);
+            } else if (configs[i].type == "STRING") {
+                std::cout << "\nString to send: " << configs[i].value.s << std::endl;
+                UA_String uaStr = UA_STRING_ALLOC(configs[i].value.s.c_str());
+                UA_Variant_setScalarCopy(&item.value.value, &uaStr, &UA_TYPES[UA_TYPES_STRING]);
+                UA_String_clear(&uaStr); // Очищаем временный UA_String
+            } else {
+                continue; // Неизвестный тип, пропускаем
             }
-            if (configs[i].type == "DINT") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_INT32];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.i;
-            }
-             if (configs[i].type == "UINT" || configs[i].type == "WORD") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_UINT16];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.u;
-            }
-            if (configs[i].type == "UDINT" || configs[i].type == "DWORD") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_UINT32];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.u;
-            }
-            if (configs[i].type == "REAL") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_FLOAT];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.f;
-            }
-            if (configs[i].type == "STRING") {
-                items[j].value.value.type = &UA_TYPES[UA_TYPES_STRING];
-                items[j].value.value.storageType = UA_VARIANT_DATA_NODELETE;
-                items[j].value.value.data = &configs[i].value.s;
-            }
-            items[j].value.hasValue = true;
-
-            j++;
+            std::cout << "\nвещь!";
+            items.push_back(item);
         }
     }
 
-    request.nodesToWrite = items;
-    request.nodesToWriteSize = data_count;
+    // Если нечего писать, выходим
+    if (items.empty())
+    {std::cout << "\nчё пусто чтоли";
+        return;}
 
+    UA_WriteRequest request;
+    UA_WriteRequest_init(&request);
+    request.nodesToWrite = items.data();
+    request.nodesToWriteSize = static_cast<size_t>(items.size());
+
+    std::cout << "\nОтправка в OPC!";
     UA_WriteResponse response = UA_Client_Service_write(client_, request);
 
     if (response.responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
@@ -258,5 +262,8 @@ void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
 
     UA_WriteResponse_clear(&response);
 
-    for (int i = 0; i < j; i++) { UA_WriteValue_clear(&items[i]); }
+    // Очищаем выделенные ресурсы
+    for (size_t i = 0; i < items.size(); i++) {
+        UA_WriteValue_clear(&items[i]);
+    }
 }

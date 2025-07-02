@@ -9,6 +9,7 @@ set(HEADER_DIR ${PROJECT_SOURCE_DIR}/include)
 set(SOURCE_DIR ${PROJECT_SOURCE_DIR}/src)
 set(LIB_DIR ${PROJECT_SOURCE_DIR}/lib)
 
+
 set(HEADERS
     ${HEADER_DIR}/industrialprotocolutils.h
     ${HEADER_DIR}/avlicensing.h
@@ -27,7 +28,6 @@ set(SOURCES
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Boost REQUIRED COMPONENTS coroutine context)
 
 include_directories(
     ${HEADER_DIR}
@@ -48,3 +48,5 @@ target_link_libraries(${PROJECT_NAME}
     Qt${QT_VERSION_MAJOR}::Core
 
 )
+
+

@@ -19,6 +19,7 @@
 #include <mutex>
 #include <future>
 #include "opcuaclient.h"
+#include <sys/statfs.h>
 
 std::atomic<bool> running{true};
 std::mutex result_mutex;
@@ -80,10 +81,6 @@ std::vector<std::string> get_mount_points() {
 }
 
 
-
-// Получение списка map<process_name, vector<pid>>
-
-// !!! ---------- ОСТАВЛЯЕМ ---- ПРОСМОТР ПРОЦЕССОВ ВСЕХ В СИСТЕМЕ ------------
 std::map<std::string, std::vector<int>> GetRunningProcesses() {
     std::map<std::string, std::vector<int>> processes;
 
@@ -204,16 +201,6 @@ public:
                 ++it;
             }
         }
-    }
-
-    std::string get_statuses() const {
-        std::ostringstream oss;
-        oss << "\n----- IP Statuses -----\n";
-        for (const auto& [ip, status] : ip_status) {
-            oss << ip << " : " << (status ? "connected" : "not connected") << "\n";
-        }
-        oss << "-----------------------\n";
-        return oss.str();
     }
 };
 
@@ -337,9 +324,6 @@ bool detect_cpu_changes(const std::map<std::string, int>& current_usages) {
 }
 
 void send_cpu_metrics(OpcUaClient& opcClient, const std::map<std::string, int>& current_usages) {
-    if (!opcClient.CheckConnection() || current_usages.empty()) {
-        return;
-    }
 
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
@@ -365,9 +349,9 @@ void send_cpu_metrics(OpcUaClient& opcClient, const std::map<std::string, int>& 
     }
 
     if (!writeConfigs.empty()) {
-        opcClient.Write(writeConfigs);
-        last_sent_cpu_usages = current_usages;
-    }
+           opcClient.Write(writeConfigs);
+           last_sent_cpu_usages = current_usages;
+       }
 }
 
 // --------------- ДИСКИ ------------------------
@@ -377,6 +361,8 @@ struct DiskUsageData {
     uint64_t used = 0;
     uint64_t available = 0;
     int use_percent = 0;
+    std::string file_system;
+    std::string mount_point;
 };
 
 struct DiskConfig {
@@ -403,6 +389,12 @@ struct DiskConfig {
 
     std::string node_percent;
     std::string type_percent;
+
+    std::string node_file_system;
+    std::string type_file_system;
+
+    std::string node_mount_point;
+    std::string type_mount_point;
 };
 
 std::map<std::string, DiskConfig> disk_configs;
@@ -455,10 +447,90 @@ bool load_disk_configs(const std::string& config_path) {
         if (disk->Attribute("node_percent")) cfg.node_percent = disk->Attribute("node_percent");
         if (disk->Attribute("type_percent")) cfg.type_percent = disk->Attribute("type_percent");
 
+        if (disk->Attribute("node_file_system")) cfg.node_file_system = disk->Attribute("node_file_system");
+        if (disk->Attribute("type_file_system")) cfg.type_file_system = disk->Attribute("type_file_system");
+
+        if (disk->Attribute("node_mount_point")) cfg.node_mount_point = disk->Attribute("node_mount_point");
+        if (disk->Attribute("type_mount_point")) cfg.type_mount_point = disk->Attribute("type_mount_point");
+
         disk_configs[name] = cfg;
     }
 
     return !disk_configs.empty();
+}
+
+std::string get_filesystem_type(long f_type) {
+    static const std::map<long, std::string> fs_types = {
+        {0xADF5, "ADFS"},
+        {0xADFF, "AFFS"},
+        {0x5346414F, "AFS"},
+        {0x09041934, "ANON_INODE_FS"},
+        {0x61847373, "AUTOFS"},
+        {0x9123683E, "BTRFS"},
+        {0x27E0EB, "CGROUP"},
+        {0x63677270, "CGROUP2"},
+        {0xFF534D42, "CIFS"},
+        {0x73757245, "CODA"},
+        {0x012FF7B7, "COH"},
+        {0x28CD3D45, "CRAMFS"},
+        {0x64626720, "DEBUGFS"},
+        {0x1CD1, "DEVFS"},
+        {0x1373, "DEVFS"},
+        {0x9FA0, "DEVPTS"},
+        {0x13661366, "ECRYPTFS"},
+        {0xDEAD3577, "EFS"},
+        {0x414A53, "EFS"},
+        {0x137D, "EXT"},
+        {0xEF51, "EXT2"},
+        {0xEF53, "EXT4"},
+        {0xF2F52010, "F2FS"},
+        {0x65735546, "FUSE"},
+        {0xBAD1DEA, "FUTEXFS"},
+        {0x4244, "HFS"},
+        {0x00C0FFEE, "HOSTFS"},
+        {0xF995E849, "HPFS"},
+        {0x958458F6, "HUGETLBFS"},
+        {0x9660, "ISOFS"},
+        {0x72B6, "JFFS2"},
+        {0x3153464A, "JFS"},
+        {0x137F, "MINIX"},
+        {0x138F, "MINIX (30 char)"},
+        {0x2468, "MINIX2"},
+        {0x2478, "MINIX2 (30 char)"},
+        {0x4D44, "MSDOS"},
+        {0x564C, "NCP"},
+        {0x6969, "NFS"},
+        {0x3434, "NILFS"},
+        {0x6E736673, "NSFS"},
+        {0x5346544E, "NTFS"},
+        {0x7461636F, "OCFS2"},
+        {0x9FA1, "OPENPROM"},
+        {0x002F, "QNX4"},
+        {0x68191122, "QNX6"},
+        {0x858458F6, "RAMFS"},
+        {0x52654973, "REISERFS"},
+        {0x7275, "ROMFS"},
+        {0x73636673, "SECURITYFS"},
+        {0xF97CFF8C, "SELINUX"},
+        {0x517B, "SMB"},
+        {0x534F434B, "SOCKFS"},
+        {0x73717368, "SQUASHFS"},
+        {0x62656572, "SYSFS"},
+        {0x012FF7B6, "SYSV2"},
+        {0x012FF7B5, "SYSV4"},
+        {0x01021994, "TMPFS"},
+        {0x15013346, "UDF"},
+        {0x00011954, "UFS"},
+        {0x9FA2, "USBDEVICE"},
+        {0x012FF7B4, "V7"},
+        {0xA501FCF5, "VXFS"},
+        {0xABBA1974, "XENFS"},
+        {0x012FF7B8, "XFS"},
+        {0x58465342, "XIAFS"}
+    };
+
+    auto it = fs_types.find(f_type);
+    return it != fs_types.end() ? it->second : "unknown";
 }
 
 std::map<std::string, DiskUsageData> collect_disk_usage(const std::string& config_path = "config.xml") {
@@ -486,6 +558,17 @@ std::map<std::string, DiskUsageData> collect_disk_usage(const std::string& confi
         data.used = data.total - data.available;
         data.use_percent = (data.total == 0) ? 0 :
                           static_cast<int>((data.used * 100) / data.total);
+
+
+        struct statfs fs_info;
+                if (statfs(name.c_str(), &fs_info) == 0) {
+                    data.file_system = get_filesystem_type(fs_info.f_type);
+                } else {
+                    data.file_system = "unknown";
+                    std::cerr << "Ошибка statfs для " << name << ": " << strerror(errno) << std::endl;
+                }
+
+                data.mount_point = name;
 
         current_data[name] = data;
     }
@@ -523,10 +606,28 @@ std::vector<std::pair<std::string, DiskUsageData>> find_changed_disks(
     return changed;
 }
 
+double convert_units(uint64_t bytes, const std::string& units, int precision) {
+    double result = static_cast<double>(bytes);
+
+    std::cout << "\nbytes: " << bytes << " units: " << units << " preci: " << precision;
+    if (units == "ГБ") {
+        result /= (1024.0 * 1024 * 1024);
+    } else if (units == "МБ") {
+        result /= (1024.0 * 1024);
+    } else if (units == "КБ") {
+        result /= 1024.0;
+    }
+
+    double multiplier = pow(10, precision);
+    result = round(result * multiplier) / multiplier;
+    return result;
+}
+
+
 void send_disk_metric(OpcUaClient& opcClient,
                      const std::string& node_id,
                      const std::string& type,
-                     const uint64_t& value,
+                     const float& value,
                      std::vector<OpcUaClient::WriteConfig>& writeConfigs) {
     OpcUaClient::WriteConfig cfg;
     cfg.allowed = true;
@@ -538,7 +639,7 @@ void send_disk_metric(OpcUaClient& opcClient,
     } else if (type == "INT") {
         cfg.value.i = value;
     } else {
-        cfg.value.f = static_cast<float>(value);
+        cfg.value.f = static_cast<double>(value);
     }
 
     writeConfigs.push_back(cfg);
@@ -548,9 +649,10 @@ void send_full_disk_metrics(
     OpcUaClient& opcClient,
     const std::vector<std::pair<std::string, DiskUsageData>>& changed_disks
 ) {
-    if (changed_disks.empty() || !opcClient.CheckConnection()) {
+    if (changed_disks.empty()) {
         return;
     }
+    std::cout << "\nмы прошли?\n";
 
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
@@ -563,7 +665,7 @@ void send_full_disk_metrics(
         const auto& cfg = it->second;
 
         if (!cfg.node_total.empty()) {
-            send_disk_metric(opcClient, cfg.node_total, cfg.type_total, data.total, writeConfigs);
+            send_disk_metric(opcClient, cfg.node_total, cfg.type_total, convert_units(data.total, cfg.units_total, cfg.precision_total), writeConfigs);
 
             if (!cfg.node_units_total.empty()) {
                 OpcUaClient::WriteConfig units_cfg;
@@ -576,7 +678,7 @@ void send_full_disk_metrics(
         }
 
         if (!cfg.node_used.empty()) {
-            send_disk_metric(opcClient, cfg.node_used, cfg.type_used, data.used, writeConfigs);
+            send_disk_metric(opcClient, cfg.node_used, cfg.type_used, convert_units(data.used, cfg.units_used, cfg.precision_used), writeConfigs);
 
             if (!cfg.node_units_used.empty()) {
                 OpcUaClient::WriteConfig units_cfg;
@@ -601,11 +703,32 @@ void send_full_disk_metrics(
             }
         }
 
+        if (!cfg.node_file_system.empty() && !data.file_system.empty()) {
+                OpcUaClient::WriteConfig fs_cfg;
+                fs_cfg.allowed = true;
+                fs_cfg.node_id = cfg.node_file_system;
+                fs_cfg.type = cfg.type_file_system;
+                fs_cfg.value.s = data.file_system;
+                writeConfigs.push_back(fs_cfg);
+             }
+
+
+        if (!cfg.node_mount_point.empty()) {
+                OpcUaClient::WriteConfig mp_cfg;
+                mp_cfg.allowed = true;
+                mp_cfg.node_id = cfg.node_mount_point;
+                mp_cfg.type = cfg.type_mount_point;
+                mp_cfg.value.s = data.mount_point;
+                writeConfigs.push_back(mp_cfg);
+                }
+
         if (!cfg.node_percent.empty()) {
             send_disk_metric(opcClient, cfg.node_percent, cfg.type_percent, data.use_percent, writeConfigs);
         }
     }
 
+    std::cout << "\nwriteconfigs пустой?" << writeConfigs.empty();
+    std::cout << "\nА подключение? " << opcClient.CheckConnection();
     if (!writeConfigs.empty()) {
         opcClient.Write(writeConfigs);
     }
@@ -613,550 +736,295 @@ void send_full_disk_metrics(
 
 
 // ----------------- RAM -------------------
-struct RAMUsageData {
+struct RAMState {
     unsigned long long total_kb = 0;
     unsigned long long used_kb = 0;
     unsigned long long free_kb = 0;
-    unsigned long long shared_kb = 0;
-    unsigned long long buff_cache_kb = 0;
-    unsigned long long available_kb = 0;
+    std::time_t last_update;
 };
 
 struct RAMConfig {
     std::string node_total;
     std::string type_total;
-    std::string node_units_total;
-    std::string type_units_total;
-    std::string units_total;
     int precision_total = 2;
 
     std::string node_used;
     std::string type_used;
-    std::string node_units_used;
-    std::string type_units_used;
-    std::string units_used;
     int precision_used = 2;
 
     std::string node_free;
     std::string type_free;
-    std::string node_units_free;
-    std::string type_units_free;
-    std::string units_free;
     int precision_free = 2;
-
-    std::string node_buff;
-    std::string type_buff;
-    std::string node_units_buff;
-    std::string type_units_buff;
-    std::string units_buff;
-    int precision_buff = 2;
-
-    std::string node_shared;
-    std::string type_shared;
-    std::string node_units_shared;
-    std::string type_units_shared;
-    std::string units_shared;
-    int precision_shared = 2;
-
-    std::string node_available;
-    std::string type_available;
-    std::string node_units_available;
-    std::string type_units_available;
-    std::string units_available;
-    int precision_available = 2;
 };
 
 RAMConfig ram_config;
-RAMUsageData last_sent_ram_data;
+RAMState last_sent_ram;
 std::chrono::steady_clock::time_point last_ram_send;
 
+// 1. Загрузка конфигурации RAM
 bool load_ram_config(const std::string& config_path) {
     tinyxml2::XMLDocument doc;
     if (doc.LoadFile(config_path.c_str()) != tinyxml2::XML_SUCCESS) {
+
         return false;
     }
 
     auto* root = doc.FirstChildElement("root");
+    if (!root) return false;
 
     auto* av_diag = root->FirstChildElement("AvDiagnostics");
+    if (!av_diag) return false;
 
     auto* ram = av_diag->FirstChildElement("RAM");
+    if (!ram) return false;
 
-    // Загрузка конфигурации TotalRAM
+    // Загрузка TotalRAM
     if (auto* total = ram->FirstChildElement("TotalRAM")) {
-        if (total->Attribute("node")) ram_config.node_total = total->Attribute("node");
-        if (total->Attribute("type")) ram_config.type_total = total->Attribute("type");
-        if (total->Attribute("node_units")) ram_config.node_units_total = total->Attribute("node_units");
-        if (total->Attribute("units")) ram_config.units_total = total->Attribute("units");
+        ram_config.node_total = total->Attribute("node");
+        ram_config.type_total = total->Attribute("type");
         total->QueryIntAttribute("precision", &ram_config.precision_total);
     }
 
-    // Загрузка конфигурации UsedRAM
+    // Загрузка UsedRAM
     if (auto* used = ram->FirstChildElement("UsedRAM")) {
-        if (used->Attribute("node")) ram_config.node_used = used->Attribute("node");
-        if (used->Attribute("type")) ram_config.type_used = used->Attribute("type");
-        if (used->Attribute("node_units")) ram_config.node_units_used = used->Attribute("node_units");
-        if (used->Attribute("units")) ram_config.units_used = used->Attribute("units");
+        ram_config.node_used = used->Attribute("node") ? used->Attribute("node") : "";
+        ram_config.type_used = used->Attribute("type") ? used->Attribute("type") : "REAL";
         used->QueryIntAttribute("precision", &ram_config.precision_used);
     }
 
-    // Загрузка конфигурации FreeRAM
+    // Загрузка FreeRAM
     if (auto* free = ram->FirstChildElement("FreeRAM")) {
-        if (free->Attribute("node")) ram_config.node_free = free->Attribute("node");
-        if (free->Attribute("type")) ram_config.type_free = free->Attribute("type");
-        if (free->Attribute("node_units")) ram_config.node_units_free = free->Attribute("node_units");
-        if (free->Attribute("units")) ram_config.units_free = free->Attribute("units");
+        ram_config.node_free = free->Attribute("node") ? free->Attribute("node") : "";
+        ram_config.type_free = free->Attribute("type") ? free->Attribute("type") : "REAL";
         free->QueryIntAttribute("precision", &ram_config.precision_free);
-    }
-
-    // Загрузка конфигурации BuffRAM
-    if (auto* buff = ram->FirstChildElement("BuffRAM")) {
-        if (buff->Attribute("node")) ram_config.node_buff = buff->Attribute("node");
-        if (buff->Attribute("type")) ram_config.type_buff = buff->Attribute("type");
-        if (buff->Attribute("node_units")) ram_config.node_units_buff = buff->Attribute("node_units");
-        if (buff->Attribute("units")) ram_config.units_buff = buff->Attribute("units");
-        buff->QueryIntAttribute("precision", &ram_config.precision_buff);
-    }
-
-    // Загрузка конфигурации SharedRAM
-    if (auto* shared = ram->FirstChildElement("SharedRAM")) {
-        if (shared->Attribute("node")) ram_config.node_shared = shared->Attribute("node");
-        if (shared->Attribute("type")) ram_config.type_shared = shared->Attribute("type");
-        if (shared->Attribute("node_units")) ram_config.node_units_shared = shared->Attribute("node_units");
-        if (shared->Attribute("units")) ram_config.units_shared = shared->Attribute("units");
-        shared->QueryIntAttribute("precision", &ram_config.precision_shared);
-    }
-
-    // Загрузка конфигурации AvailableRAM
-    if (auto* available = ram->FirstChildElement("AvailableRAM")) {
-        if (available->Attribute("node")) ram_config.node_available = available->Attribute("node");
-        if (available->Attribute("type")) ram_config.type_available = available->Attribute("type");
-        if (available->Attribute("node_units")) ram_config.node_units_available = available->Attribute("node_units");
-        if (available->Attribute("units")) ram_config.units_available = available->Attribute("units");
-        available->QueryIntAttribute("precision", &ram_config.precision_available);
     }
 
     return true;
 }
 
-RAMUsageData collect_ram_usage() {
-    RAMUsageData data;
+// 2. Сбор данных о RAM
+RAMState collect_ram_usage() {
+    RAMState state;
     std::array<char, 128> buffer;
     std::string line;
 
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("free -k | grep Mem:", "r"), pclose);
-    if (!pipe) return data;
+    if (!pipe) return state;
 
     if (fgets(buffer.data(), buffer.size(), pipe.get())) {
         line = buffer.data();
         std::istringstream iss(line);
         std::string label;
-        iss >> label >> data.total_kb >> data.used_kb >> data.free_kb
-            >> data.shared_kb >> data.buff_cache_kb >> data.available_kb;
+        float shared_kb, buff_cache_kb;
+        iss >> label >> state.total_kb >> state.used_kb >> state.free_kb
+            >> shared_kb >> buff_cache_kb; // Эти поля больше не используются
     }
 
-    return data;
+    state.last_update = std::time(nullptr);
+    return state;
 }
 
-bool is_ram_data_changed(const RAMUsageData& current) {
-    // Порог изменения для числовых значений (1MB)
-    const unsigned long long threshold_kb = 1024;
-    const float threshold_percent = 0.5f; // ну и процент на всякий случай
+// 3. Проверка изменений (с порогом 1MB)
+bool is_ram_changed(const RAMState& current) {
+    const unsigned long long threshold_kb = 1024; // 1MB
 
     return
-        std::abs(static_cast<long>(current.total_kb - last_sent_ram_data.total_kb)) > threshold_kb ||
-        std::abs(static_cast<long>(current.used_kb - last_sent_ram_data.used_kb)) > threshold_kb ||
-        std::abs(static_cast<long>(current.free_kb - last_sent_ram_data.free_kb)) > threshold_kb ||
-        std::abs(static_cast<long>(current.shared_kb - last_sent_ram_data.shared_kb)) > threshold_kb ||
-        std::abs(static_cast<long>(current.buff_cache_kb - last_sent_ram_data.buff_cache_kb)) > threshold_kb ||
-        std::abs(static_cast<long>(current.available_kb - last_sent_ram_data.available_kb)) > threshold_kb;
+        std::abs(static_cast<long>(current.total_kb - last_sent_ram.total_kb)) > threshold_kb ||
+        std::abs(static_cast<long>(current.used_kb - last_sent_ram.used_kb)) > threshold_kb ||
+        std::abs(static_cast<long>(current.free_kb - last_sent_ram.free_kb)) > threshold_kb;
 }
 
-float convert_units(unsigned long long value_kb, const std::string& units, int precision) {
-    if (units == "КБ") {
-        return static_cast<float>(value_kb);
-    } else if (units == "МБ") {
-        return static_cast<float>(value_kb) / 1024.0f;
-    } else if (units == "ГБ") {
-        return static_cast<float>(value_kb) / (1024.0f * 1024.0f);
-    }
-    return static_cast<float>(value_kb);
-}
-
-void send_ram_metrics(OpcUaClient& opcClient, const RAMUsageData& data, std::string config_path) {
-    static bool config_loaded = false;
-    if (!config_loaded) {
-        if (load_ram_config(config_path)) {
-            config_loaded = true;
-    }
-    }
-
+// 4. Отправка метрик в OPC UA
+void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
+
+    std::cout << "\ncfg: " << ram_config.node_total << " : " << ram_config.type_total;
+    // Конвертация значений в ГБ (по умолчанию)
+    auto convert_to_gb = [](unsigned long long kb, int precision) {
+        return static_cast<float>(kb);
+    };
 
     // Total RAM
     if (!ram_config.node_total.empty()) {
-        float converted_value = convert_units(data.total_kb, ram_config.units_total, ram_config.precision_total);
-
         OpcUaClient::WriteConfig cfg;
         cfg.allowed = true;
         cfg.node_id = ram_config.node_total;
         cfg.type = ram_config.type_total;
-        cfg.allowed = true;
-            if (ram_config.type_total == "STRING") {
-                cfg.value.s = std::to_string(converted_value);
-            } else if (ram_config.type_total == "INT") {
-                cfg.value.i = static_cast<int>(converted_value);
-            } else {
-                cfg.value.f = converted_value;
-            }
-        writeConfigs.push_back(cfg);
 
-        if (!ram_config.node_units_total.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_total;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_total;
-            writeConfigs.push_back(units_cfg);
+        float value = convert_to_gb(data.total_kb, ram_config.precision_total);
+        if (ram_config.type_total == "INT") {
+            cfg.value.i = static_cast<int>(value);
+        } else {
+            cfg.value.f = static_cast<float>(value);
         }
+        writeConfigs.push_back(cfg);
     }
 
     // Used RAM
     if (!ram_config.node_used.empty()) {
-        float converted_value = convert_units(data.used_kb, ram_config.units_used, ram_config.precision_used);
-
         OpcUaClient::WriteConfig cfg;
         cfg.allowed = true;
         cfg.node_id = ram_config.node_used;
         cfg.type = ram_config.type_used;
-        if (ram_config.type_used == "STRING") {
-            cfg.value.s = std::to_string(converted_value);
-        } else if (ram_config.type_used == "INT") {
-            cfg.value.i = static_cast<int>(converted_value);
+
+        float value = convert_to_gb(data.used_kb, ram_config.precision_used);
+        if (ram_config.type_used == "INT") {
+            cfg.value.i = static_cast<int>(value);
         } else {
-            cfg.value.f = converted_value;
+            cfg.value.f = static_cast<float>(value);
         }
         writeConfigs.push_back(cfg);
-
-        if (!ram_config.node_units_used.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_used;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_used;
-            writeConfigs.push_back(units_cfg);
-        }
     }
 
     // Free RAM
     if (!ram_config.node_free.empty()) {
-        float converted_value = convert_units(data.free_kb, ram_config.units_free, ram_config.precision_free);
-
         OpcUaClient::WriteConfig cfg;
         cfg.allowed = true;
         cfg.node_id = ram_config.node_free;
         cfg.type = ram_config.type_free;
-        if (ram_config.type_free == "STRING") {
-            cfg.value.s = std::to_string(converted_value);
-        } else if (ram_config.type_free == "INT") {
-            cfg.value.i = static_cast<int>(converted_value);
+
+        float value = convert_to_gb(data.free_kb, ram_config.precision_free);
+        if (ram_config.type_free == "INT") {
+            cfg.value.i = static_cast<int>(value);
         } else {
-            cfg.value.f = converted_value;
+            cfg.value.f = static_cast<float>(value);
         }
         writeConfigs.push_back(cfg);
-
-        if (!ram_config.node_units_free.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_free;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_free;
-            writeConfigs.push_back(units_cfg);
-        }
     }
 
-    // Buff/Cache RAM
-    if (!ram_config.node_buff.empty()) {
-        float converted_value = convert_units(data.buff_cache_kb, ram_config.units_buff, ram_config.precision_buff);
-
-        OpcUaClient::WriteConfig cfg;
-        cfg.allowed = true;
-        cfg.node_id = ram_config.node_buff;
-        cfg.type = ram_config.type_buff;
-        if (ram_config.type_buff == "STRING") {
-            cfg.value.s = std::to_string(converted_value);
-        } else if (ram_config.type_buff == "INT") {
-            cfg.value.i = static_cast<int>(converted_value);
-        } else {
-            cfg.value.f = converted_value;
-        }
-        writeConfigs.push_back(cfg);
-
-        if (!ram_config.node_units_buff.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_buff;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_buff;
-            writeConfigs.push_back(units_cfg);
-        }
-    }
-
-    // Shared RAM
-    if (!ram_config.node_shared.empty()) {
-        float converted_value = convert_units(data.shared_kb, ram_config.units_shared, ram_config.precision_shared);
-
-        OpcUaClient::WriteConfig cfg;
-        cfg.allowed = true;
-        cfg.node_id = ram_config.node_shared;
-        cfg.type = ram_config.type_shared;
-        if (ram_config.type_shared == "STRING") {
-            cfg.value.s = std::to_string(converted_value);
-        } else if (ram_config.type_shared == "INT") {
-            cfg.value.i = static_cast<int>(converted_value);
-        } else {
-            cfg.value.f = converted_value;
-        }
-        writeConfigs.push_back(cfg);
-
-        if (!ram_config.node_units_shared.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_shared;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_shared;
-            writeConfigs.push_back(units_cfg);
-        }
-    }
-
-    // Available RAM
-    if (!ram_config.node_available.empty()) {
-        float converted_value = convert_units(data.available_kb, ram_config.units_available, ram_config.precision_available);
-
-        OpcUaClient::WriteConfig cfg;
-        cfg.allowed = true;
-        cfg.node_id = ram_config.node_available;
-        cfg.type = ram_config.type_available;
-        if (ram_config.type_available == "STRING") {
-            cfg.value.s = std::to_string(converted_value);
-        } else if (ram_config.type_available == "INT") {
-            cfg.value.i = static_cast<int>(converted_value);
-        } else {
-            cfg.value.f = converted_value;
-        }
-        writeConfigs.push_back(cfg);
-
-        if (!ram_config.node_units_available.empty()) {
-            OpcUaClient::WriteConfig units_cfg;
-            units_cfg.allowed = true;
-            units_cfg.node_id = ram_config.node_units_available;
-            units_cfg.type = "STRING";
-            units_cfg.value.s = ram_config.units_available;
-            writeConfigs.push_back(units_cfg);
-        }
-    }
-
-    if (!writeConfigs.empty() && opcClient.CheckConnection()) {
+    //std::cout << "\n node: " << writeConfigs[0].node_id << "\n type" << writeConfigs[0].type << "\n value" << writeConfigs[0].value.f;
+    std::cout << "\nПусто RAM " << writeConfigs.empty() << " | " << !opcClient.CheckConnection();
+    if (!writeConfigs.empty()) {
         opcClient.Write(writeConfigs);
-        last_sent_ram_data = data;  // Обновляем последние отправленные данные
+        last_sent_ram = data;
     }
 }
+
 
 // ---------------- Processes ---------------------
-
 struct ProcessState {
     std::string status;
+    bool is_group_result = false;
+    std::string group_node;
+    std::string value_type;
 };
 
-std::map<std::string, ProcessState> last_sent_processes;
-std::map<std::string, std::pair<std::string, std::string>> process_configs; // name -> {node_status, type_status}
+std::map<std::string, ProcessState> last_sent_states;
 
-void print_last_sent_processes(const std::map<std::string, ProcessState>& processes) {
-    std::cout << "\n[last_sent_processes]" << ":\n";
-    for (const auto& [name, state] : processes) {
-        std::cout << "  • " << name << " : "
-                  << (state.status == "RUNNING" ? "RUNNING" : "NOT_RUNNING") << "\n";
-    }
-    std::cout << std::endl;
-}
-
-// 1. Функция загрузки и проверки процессов
+// 1. Сбор состояний процессов
 std::map<std::string, ProcessState> collect_process_states(const std::string& xml_path) {
     std::map<std::string, ProcessState> current_states;
-    std::map<std::string, std::pair<std::vector<std::string>, std::string>> process_groups; // Группы процессов с их логикой
+    tinyxml2::XMLDocument doc;
 
-    // Загрузка процессов из XML
-    static auto last_xml_load = std::chrono::steady_clock::now();
-    if (process_configs.empty() ||
-        std::chrono::steady_clock::now() - last_xml_load > std::chrono::seconds(1)) {
+    if (doc.LoadFile(xml_path.c_str()) == tinyxml2::XML_SUCCESS) {
+        if (auto* root = doc.FirstChildElement("root")) {
+            if (auto* av_diag = root->FirstChildElement("AvDiagnostics")) {
+                // Получаем список всех существующих процессов один раз
+                auto running_processes = GetRunningProcesses();
 
-        process_configs.clear();
-        tinyxml2::XMLDocument doc;
-        if (doc.LoadFile(xml_path.c_str()) == tinyxml2::XML_SUCCESS) {
-            if (auto* root = doc.FirstChildElement("root")) {
-                if (auto* av_diag = root->FirstChildElement("AvDiagnostics")) {
-                    // Ищем все секции Processes
-                    for (auto* processes = av_diag->FirstChildElement("Processes");
-                         processes;
-                         processes = processes->NextSiblingElement("Processes")) {
+                for (auto* processes = av_diag->FirstChildElement("Processes");
+                     processes;
+                     processes = processes->NextSiblingElement("Processes")) {
 
-                        const char* logic = processes->Attribute("logic");
-                        std::string group_logic = logic ? logic : "AND";
-                        std::vector<std::string> group_processes;
+                    const char* group_node = processes->Attribute("node");
+                    const char* logic = processes->Attribute("logic");
+                    const char* type = processes->Attribute("type");
 
-                        // Перебираем все Process в текущей секции
-                        for (auto* proc = processes->FirstChildElement("Process");
-                             proc;
-                             proc = proc->NextSiblingElement("Process")) {
+                    if (!group_node || !type || (logic && std::string(logic) != "AND"))
+                        continue;
 
-                            if (const char* name = proc->Attribute("name")) {
-                                const char* node_status = proc->Attribute("node_status");
-                                const char* type_status = proc->Attribute("type_status");
+                    std::vector<std::string> members;
+                    for (auto* proc = processes->FirstChildElement("Process");
+                         proc;
+                         proc = proc->NextSiblingElement("Process")) {
 
-                                if (node_status && type_status) {
-                                    process_configs[name] = {node_status, type_status};
-                                    group_processes.push_back(name);
-                                }
+                        if (const char* name = proc->Attribute("name")) {
+                            members.push_back(name);
+                        }
+                    }
+
+                    if (!members.empty()) {
+                        bool all_running = true;
+                        bool all_exist = true;
+
+                        for (const auto& name : members) {
+                            auto it = running_processes.find(name);
+                            bool exists = (it != running_processes.end());
+                            bool is_running = exists && !it->second.empty(); // Процесс работает, если есть хотя бы один PID
+
+                            ProcessState state;
+                            state.status = exists ? (is_running ? "RUNNING" : "NOT_RUNNING") : "NOT_EXIST";
+                            current_states[name] = state;
+
+                            if (!exists) {
+                                all_exist = false;
+                                all_running = false;
+                            } else if (!is_running) {
+                                all_running = false;
                             }
                         }
 
-                        if (!group_processes.empty()) {
-                            std::string group_name = processes->Attribute("node") ? processes->Attribute("node") : "default";
-                            process_groups[group_name] = {group_processes, group_logic};
-                        }
+                        // Группа считается работающей только если ВСЕ процессы:
+                        // 1. Существуют в системе
+                        // 2. Находятся в состоянии RUNNING
+                        ProcessState group_state;
+                        group_state.status = (all_exist && all_running) ? "RUNNING" : "NOT_RUNNING";
+                        group_state.is_group_result = true;
+                        group_state.group_node = group_node;
+                        group_state.value_type = type;
+                        current_states[group_node] = group_state;
                     }
                 }
             }
         }
-        last_xml_load = std::chrono::steady_clock::now();
     }
 
-    // Получение текущих процессов в системе
-    auto running_processes = GetRunningProcesses();
-
-    // Формирование состояний и проверка групп
-    for (const auto& [group_name, group_data] : process_groups) {
-        const auto& [process_names, logic] = group_data;
-        bool all_running = true;
-        bool any_running = false;
-        std::vector<std::string> not_running;
-
-        for (const auto& name : process_names) {
-            bool is_running = (running_processes.find(name) != running_processes.end());
-
-            ProcessState state;
-            state.status = is_running ? "RUNNING" : "NOT_RUNNING";
-            current_states[name] = state;
-
-            if (!is_running) {
-                not_running.push_back(name);
-            }
-            all_running &= is_running;
-            any_running |= is_running;
-        }
-
-        if (logic == "AND" && !all_running) {
-            std::cerr << "\n[WARNING] processes ";
-            //for (const auto& proc : not_running) {
-            //    std::cerr << proc << " ";
-            //}
-            //std::cerr << std::endl;
-        }
-        else if (logic == "OR" && !any_running) {
-            // придумать что сделать с OR, пока здесь просто проверка, работает ли хоть какой-то
-        }
-    }
     return current_states;
 }
-// 2. Изменения
+
+// 2. Обнаружение изменений
 bool detect_process_changes(const std::map<std::string, ProcessState>& current) {
-    bool has_changes = false;
+    // Проверяем только групповые ноды
+    for (const auto& [name, state] : current) {
+        if (!state.is_group_result) continue;
 
-    for (const auto& [name, current_state] : current) {
-        auto last_it = last_sent_processes.find(name);
-
-        if (last_it == last_sent_processes.end() ||
-            last_it->second.status != current_state.status) {
-
-            has_changes = true;
-            break;
+        auto it = last_sent_states.find(name);
+        if (it == last_sent_states.end() || it->second.status != state.status) {
+            return true;
         }
     }
-
-    // Проверка удаленных процессов (исчезли из XML)
-    if (!has_changes) {
-        for (const auto& [name, _] : last_sent_processes) {
-            if (process_configs.find(name) == process_configs.end()) {
-                has_changes = true;
-                break;
-            }
-        }
-    }
-    last_sent_processes = current;
-    return has_changes;
+    return false;
 }
 
-// 3. OPC UA отправка (теперь принимает current_processes вместо changed)
+// 3. Отправка метрик в OPC
 void send_process_metrics(OpcUaClient& opcClient,
-    const std::map<std::string, ProcessState>& current_processes) {
+                         const std::map<std::string, ProcessState>& current) {
 
-    std::vector<OpcUaClient::WriteConfig> writeConfigs;
+    std::vector<OpcUaClient::WriteConfig> writes;
 
-    for (const auto& [name, current_state] : current_processes) {
-        auto last_it = last_sent_processes.find(name);
-        auto config_it = process_configs.find(name);
+    for (const auto& [name, state] : current) {
+        if (!state.is_group_result) continue;
 
-        // Проверяем, нужно ли отправлять этот процесс
-        if (config_it != process_configs.end() &&
-            (last_it == last_sent_processes.end() ||
-             last_it->second.status != current_state.status)) {
+        OpcUaClient::WriteConfig cfg;
+        cfg.node_id = state.group_node;
+        cfg.type = state.value_type;
 
-            const auto& [node_status, type_status] = config_it->second;
-
-            int value = (current_state.status == "RUNNING");
-            OpcUaClient::WriteConfig status_cfg;
-            status_cfg.allowed = true;
-            status_cfg.node_id = node_status;
-            status_cfg.type = type_status;
-            if (type_status == "STRING") {
-                status_cfg.value.s = current_state.status;
-            } else if (type_status == "INT") {
-                status_cfg.value.i = value;
-            } else {
-                status_cfg.value.f = static_cast<float>(value);
-            }
-
-            writeConfigs.push_back(status_cfg);
+        if (state.value_type == "BOOL" || state.value_type == "INT") {
+            cfg.value.i = (state.status == "RUNNING") ? 1 : 0;
         }
+        else if (state.value_type == "REAL") {
+            cfg.value.f = (state.status == "RUNNING") ? 1.0f : 0.0f;
+        }
+        else {
+            cfg.value.s = state.status;
+        }
+
+        writes.push_back(cfg);
+        last_sent_states[name] = state;
     }
 
-    // Проверка удаленных процессов
-    for (const auto& [name, _] : last_sent_processes) {
-        if (process_configs.find(name) == process_configs.end()) {
-            // Если нужно обрабатывать удаленные процессы, можно добавить здесь код
-        }
-    }
-
-    if (!writeConfigs.empty()) {
-
-        for (const auto& [name, state] : current_processes) {
-        last_sent_processes[name] = state;
-        }
-
-        if (opcClient.CheckConnection()) {
-        opcClient.Write(writeConfigs);
-        }
-
-
-
-        // Удаляем процессы, которых больше нет в конфиге
-        for (auto it = last_sent_processes.begin(); it != last_sent_processes.end(); ) {
-            if (process_configs.find(it->first) == process_configs.end()) {
-                it = last_sent_processes.erase(it);
-            } else {
-                ++it;
-            }
-        }
+    if (!writes.empty() && opcClient.CheckConnection()) {
+        opcClient.Write(writes);
     }
 }
 
@@ -1208,8 +1076,6 @@ bool load_raid_config(const std::string& config_path) {
             .type_status = raid->Attribute("type_status"),
             .node_state = raid->Attribute("node_state"),
             .type_state = raid->Attribute("type_state"),
-            .node_rebuild = raid->Attribute("node_rebuild"),
-            .type_rebuild = raid->Attribute("type_rebuild")
         };
     }
 
@@ -1239,52 +1105,81 @@ std::map<std::string, RaidState> collect_raid_states(const std::string& config_p
     }
 
     std::string line;
-    std::regex rebuild_regex(R"(recovery\s*=\s*(\d+\.\d+)%)");
+    std::string current_raid;
+    bool in_raid_section = false;
+
+    // Регулярные выражения
     std::regex raid_regex(R"(^(md\d+)\s*:.*)");
+    std::regex state_regex(R"(\[([U_/]+)\])");  // Состояние дисков: [UU], [U_], [3/3]
+    std::regex rebuild_regex(R"((recovery|resync)\s*=\s*(\d+\.\d+)%)");
+    std::regex active_regex(R"(active\s+(raid\d+))");
 
     while (std::getline(mdstat, line)) {
         std::smatch match;
 
+        // Поиск начала секции RAID
         if (std::regex_search(line, match, raid_regex)) {
-            std::string raid_name = match[1];
+            current_raid = match[1];
+            in_raid_section = true;
 
             // Проверяем, есть ли этот RAID в конфигурации
-            if (raid_config.raid_configs.find(raid_name) == raid_config.raid_configs.end()) {
+            if (raid_config.raid_configs.find(current_raid) == raid_config.raid_configs.end()) {
+                current_raid.clear();
+                in_raid_section = false;
                 continue;
             }
 
             RaidState state;
+            state.state = false;
+            state.rebuild_percent = -1;
 
-            if (line.find("_") != std::string::npos) {
-                state.status = "degraded";
-                state.state = false;
+            // Проверка состояния дисков
+            if (std::regex_search(line, match, state_regex)) {
+                std::string disk_state = match[1];
+                if (disk_state.find('_') != std::string::npos) {
+                    state.status = "degraded";
+                } else {
+                    state.status = "optimal";
+                    state.state = true;
+                }
             } else {
-                state.status = "optimal";
-                state.state = true;
+                state.status = "unknown";
             }
 
+            current_states[current_raid] = state;
+            continue;
+        }
+
+        // Обработка секции восстановления
+        if (in_raid_section && !current_raid.empty()) {
             if (std::regex_search(line, match, rebuild_regex)) {
-                state.status = "rebuilding";
-                state.rebuild_percent = std::stod(match[1]);
-                state.state = false;
-            } else {
-                state.rebuild_percent = -1;
+                current_states[current_raid].rebuild_percent = std::stod(match[2]);
+                current_states[current_raid].status = "rebuilding " + std::string(match[2]) + "%";
+                current_states[current_raid].state = false;
             }
+        }
 
-            current_states[raid_name] = state;
+        // Сброс флага при пустой строке
+        if (line.empty()) {
+            in_raid_section = false;
+            current_raid.clear();
         }
     }
 
-    if (current_states.empty()) {
-        RaidState state;
-        state.status = "inactive";
-        state.state = false;
-        state.rebuild_percent = -1;
-        current_states["system"] = state;
+    // Если RAID-массивы найдены, но не обработаны
+    for (const auto& [name, cfg] : raid_config.raid_configs) {
+        if (current_states.find(name) == current_states.end()) {
+            RaidState state;
+            state.status = "inactive";
+            state.state = false;
+            state.rebuild_percent = -1;
+            current_states[name] = state;
+        }
     }
 
     return current_states;
 }
+
 
 std::map<std::string, RaidState> detect_raid_changes(
     const std::map<std::string, RaidState>& current) {
@@ -1349,11 +1244,13 @@ std::map<std::string, RaidState> detect_raid_changes(
 void send_raid_metrics(OpcUaClient& opcClient,
     const std::map<std::string, RaidState>& changed) {
 
-    if (changed.empty() || !opcClient.CheckConnection()) return;
+    if (changed.empty()) {std::cout << "\nизменения пустые у рейда"; return;}
+
 
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
     for (const auto& [name, state] : changed) {
+        std::cout << "\nnama " << name << "\n";
         auto config_it = raid_config.raid_configs.find(name);
         if (config_it == raid_config.raid_configs.end()) continue;
 
@@ -1363,41 +1260,47 @@ void send_raid_metrics(OpcUaClient& opcClient,
         status_cfg.node_id = config_it->second.node_status;
         status_cfg.type = config_it->second.type_status;
         status_cfg.value.s = state.status;
+        std::cout << "\nRaid Status node " << status_cfg.node_id << " | " << status_cfg.value.s;
         writeConfigs.push_back(status_cfg);
 
         // Исправность
         OpcUaClient::WriteConfig health_cfg;
+
         health_cfg.allowed = true;
         health_cfg.node_id = config_it->second.node_state;
         health_cfg.type = config_it->second.type_state;
             if (health_cfg.type == "STRING") {
                 health_cfg.value.s = std::to_string(state.state);
-            } else if (health_cfg.type == "INT") {
-                health_cfg.value.i = state.state;
+            } else if (health_cfg.type == "BOOL") {
+                health_cfg.value.b = state.state;
             } else {
                 health_cfg.value.f = static_cast<float>(state.state);
             }
 
+
+        std::cout << "\nRaid bool node " << health_cfg.node_id << " | " << health_cfg.value.i;
         writeConfigs.push_back(health_cfg);
+        std::cout << "\n\nwriteconf: " << writeConfigs[0].node_id << ", " << writeConfigs[1].node_id;
 
-        // Процент восстановления
-        if (state.rebuild_percent >= 0 && !config_it->second.node_rebuild.empty()) {
-            OpcUaClient::WriteConfig rebuild_cfg;
-            rebuild_cfg.allowed = true;
-            rebuild_cfg.node_id = config_it->second.node_rebuild;
-            rebuild_cfg.type = config_it->second.type_rebuild;
+//        // Процент восстановления
+//        if (state.rebuild_percent >= 0 && !config_it->second.node_rebuild.empty()) {
+//            OpcUaClient::WriteConfig rebuild_cfg;
+//            rebuild_cfg.allowed = true;
+//            rebuild_cfg.node_id = config_it->second.node_rebuild;
+//            rebuild_cfg.type = config_it->second.type_rebuild;
 
-            if (config_it->second.type_rebuild == "INT") {
-                rebuild_cfg.value.i = static_cast<int>(state.rebuild_percent);
-            } else {
-                rebuild_cfg.value.f = state.rebuild_percent;
-            }
+//            if (config_it->second.type_rebuild == "INT") {
+//                rebuild_cfg.value.i = static_cast<int>(state.rebuild_percent);
+//            } else {
+//                rebuild_cfg.value.f = state.rebuild_percent;
+//            }
 
-            writeConfigs.push_back(rebuild_cfg);
-        }
+//            writeConfigs.push_back(rebuild_cfg);
+//        }
     }
 
     if (!writeConfigs.empty()) {
+        std::cout << "\nСЮда?";
         opcClient.Write(writeConfigs);
 
         for (const auto& [name, state] : changed) {
@@ -1413,18 +1316,21 @@ void send_raid_metrics(OpcUaClient& opcClient,
 // ------------------ IP ---------------------
 
 struct IpState {
-    bool connected;          // Статус подключения
-    std::time_t last_change; // Время последнего изменения
+    bool connected;
+    std::time_t last_change;
+    bool is_group_result;
+    std::string group_node;
+    std::string value_type;
 };
 
 std::map<std::string, IpState> last_sent_ips;
 IpChecker ip_checker;
 
-
 // 1. Функция сбора состояний IP
+// 1. Функция сбора состояний IP с поддержкой групп
 std::map<std::string, IpState> collect_ip_states() {
     std::map<std::string, IpState> current_states;
-    std::map<std::string, std::pair<std::vector<std::string>, std::string>> ip_groups; // Группы IP с их логикой
+    std::map<std::string, std::pair<std::vector<std::string>, std::string>> ip_groups;
 
     // Загрузка конфигурации IP групп
     tinyxml2::XMLDocument doc;
@@ -1435,9 +1341,12 @@ std::map<std::string, IpState> collect_ip_states() {
             if (av_diag) {
                 for (auto* ips = av_diag->FirstChildElement("IPs"); ips; ips = ips->NextSiblingElement("IPs")) {
                     const char* logic = ips->Attribute("logic");
-                    std::string group_logic = logic ? logic : "AND";
-                    std::vector<std::string> group_ips;
+                    const char* group_node = ips->Attribute("node");
+                    const char* group_type = ips->Attribute("type");
 
+                    if (!group_node || !group_type) continue;
+
+                    std::vector<std::string> group_ips;
                     for (auto* ip = ips->FirstChildElement("IP"); ip; ip = ip->NextSiblingElement("IP")) {
                         if (const char* address = ip->Attribute("address")) {
                             group_ips.push_back(address);
@@ -1445,8 +1354,7 @@ std::map<std::string, IpState> collect_ip_states() {
                     }
 
                     if (!group_ips.empty()) {
-                        std::string group_name = ips->Attribute("node") ? ips->Attribute("node") : "default";
-                        ip_groups[group_name] = {group_ips, group_logic};
+                        ip_groups[group_node] = {group_ips, logic ? logic : "AND"};
                     }
                 }
             }
@@ -1456,40 +1364,41 @@ std::map<std::string, IpState> collect_ip_states() {
     ip_checker.load_ips_from_xml();
     ip_checker.check_ips();
     ip_checker.update_async_results();
-
     auto& status_map = ip_checker.get_status_map();
 
-    // Проверка групп IP на соответствие логике
-    for (const auto& [group_name, group_data] : ip_groups) {
+    // Формирование состояний отдельных IP
+    for (const auto& [ip, connected] : status_map) {
+        IpState state;
+        state.connected = connected;
+        state.last_change = std::time(nullptr);
+        state.is_group_result = false;
+        current_states[ip] = state;
+    }
+
+    // Проверка групп IP и формирование групповых состояний
+    for (const auto& [group_node, group_data] : ip_groups) {
         const auto& [ips, logic] = group_data;
-        bool all_connected = true;
-        std::vector<std::string> disconnected_ips;
+        bool group_result = (logic == "AND"); // Инициализация в зависимости от логики
 
         for (const auto& ip : ips) {
             auto it = status_map.find(ip);
             bool connected = (it != status_map.end() && it->second);
 
-            if (!connected) {
-                disconnected_ips.push_back(ip);
+            if (logic == "AND") {
+                group_result &= connected;
+            } else { // OR
+                group_result |= connected;
             }
-            all_connected &= connected;
         }
 
-        if (logic == "AND" && !all_connected) {
-            std::cerr << "[WARNING] IP не подключены: ";
-            for (const auto& ip : disconnected_ips) {
-                std::cerr << ip << " ";
-            }
-            std::cerr << std::endl;
-        }
-    }
-
-    // Формирование состояний IP
-    for (const auto& [ip, connected] : status_map) {
-        IpState state;
-        state.connected = connected;
-        state.last_change = std::time(nullptr);
-        current_states[ip] = state;
+        // Сохраняем результат группы
+        IpState group_state;
+        group_state.connected = group_result;
+        group_state.last_change = std::time(nullptr);
+        group_state.is_group_result = true;
+        group_state.group_node = group_node;
+        group_state.value_type = "BOOL"; // Для IP групп всегда BOOL
+        current_states[group_node] = group_state;
     }
 
     return current_states;
@@ -1539,65 +1448,36 @@ struct IpConfig {
 
 IpConfig ip_config;
 
-bool load_ip_config(const std::string& config_path) {
-    tinyxml2::XMLDocument doc;
-    if (doc.LoadFile(config_path.c_str()) != tinyxml2::XML_SUCCESS) {
-        return false;
-    }
 
-    auto* root = doc.FirstChildElement("root");
-    if (!root) return false;
-
-    auto* av_diag = root->FirstChildElement("AvDiagnostics");
-    if (!av_diag) return false;
-
-    for (auto* ips = av_diag->FirstChildElement("IPs"); ips; ips = ips->NextSiblingElement("IPs")) {
-        for (auto* ip = ips->FirstChildElement("IP"); ip; ip = ip->NextSiblingElement("IP")) {
-            const char* address = ip->Attribute("address");
-            const char* node = ip->Attribute("node");
-            const char* type = ip->Attribute("type");
-
-            if (address && node && type) {
-                ip_config.ip_configs[address] = std::make_pair(node, type);
-            }
-        }
-    }
-
-    return !ip_config.ip_configs.empty();
-}
-
-void send_ip_metrics(OpcUaClient& opcClient,
-                    const std::map<std::string, IpState>& changed) {
-
+void send_ip_metrics(OpcUaClient& opcClient, const std::map<std::string, IpState>& changed) {
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
-    for (const auto& [ip, state] : changed) {
-        auto config_it = ip_config.ip_configs.find(ip);
-        if (config_it == ip_config.ip_configs.end()) {
-            continue;
-        }
-
-        const auto& [node_id, type] = config_it->second;
+    for (const auto& [name, state] : changed) {
+        // Отправляем только групповые ноды
+        if (!state.is_group_result) continue;
 
         OpcUaClient::WriteConfig cfg;
         cfg.allowed = true;
-        cfg.node_id = node_id;
-        cfg.type = type;
+        cfg.node_id = state.group_node;
+        cfg.type = state.value_type;
 
-        if (type == "BOOL") {
-            cfg.value.i = state.connected;
+        if (state.value_type == "BOOL") {
+            cfg.value.i = state.connected ? 1 : 0;
         } else {
-            cfg.value.s = state.connected;
+            cfg.value.s = state.connected ? "true" : "false";
         }
 
         writeConfigs.push_back(cfg);
     }
 
-    if (!writeConfigs.empty()) {
-       opcClient.Write(writeConfigs);
+    if (!writeConfigs.empty() && opcClient.CheckConnection()) {
+        opcClient.Write(writeConfigs);
 
-       for (const auto& [ip, state] : changed) {
-           last_sent_ips[ip] = state;
+        // Обновляем last_sent_ips только для групповых нод
+        for (const auto& [name, state] : changed) {
+            if (state.is_group_result) {
+                last_sent_ips[name] = state;
+            }
         }
     }
 }
@@ -1743,7 +1623,7 @@ void send_guardant_metrics(OpcUaClient& opcClient,
             const char* xml_product = key->Attribute("product");
             if (xml_product && product == xml_product) {
 
-                std::cout << "\nОтправка grd";
+                //std::cout << "\nОтправка grd";
                 OpcUaClient::WriteConfig status_cfg;
                 status_cfg.allowed = true;
                 status_cfg.node_id = key->Attribute("node");
@@ -1805,22 +1685,47 @@ int main() {
     std::atomic<bool> guardant_check_running{false};
 
     // Контейнеры данных
-    OpcUaClient opcClient("192.168.1.254", 4840);
+    // Загрузка конфигурации OPC из XML
+    const std::string config_path = "config.xml";
+    tinyxml2::XMLDocument doc;
+    if (doc.LoadFile(config_path.c_str()) != tinyxml2::XML_SUCCESS) {
+        std::cerr << "Ошибка загрузки файла конфигурации" << std::endl;
+        return 1;
+    }
+
+    // Получение параметров OPC-сервера
+    std::string opc_address = "192.168.6.72";
+    int opc_port = 62544;
+
+    if (auto* root = doc.FirstChildElement("root")) {
+        if (auto* av_diag = root->FirstChildElement("AvDiagnostics")) {
+            if (auto* opc = av_diag->FirstChildElement("OPC")) {
+                if (auto* server = opc->FirstChildElement("Server")) {
+                    if (const char* address = server->Attribute("address")) {
+                        if (const char* port = server->Attribute("port")) {
+                            opc_port = std::stoi(port);
+                            opc_address = address;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Инициализация OPC-клиента с параметрами из XML
+    OpcUaClient opcClient(opc_address, opc_port);
+    std::cout << "\nOPC "
+              << opc_address << ":" << opc_port << std::endl;
     IpChecker ip_checker;
     ip_checker.load_ips_from_xml();
 
+
+
     // Создание переменных для grd
-    const std::string config_path = "config.xml";
-    tinyxml2::XMLDocument doc;
     doc.LoadFile(config_path.c_str());
-    auto* grd_keys = doc.FirstChildElement("root")
-                   ->FirstChildElement("AvDiagnostics")
-                   ->FirstChildElement("GRDKeys");
-
-
-
 
     while (true) {
+
         auto now = std::chrono::steady_clock::now();
 
         // ============= БЫСТРЫЕ ПРОВЕРКИ (1 сек) =============
@@ -1839,7 +1744,7 @@ int main() {
 
             auto current_cpu_usages = collect_cpu_usages(config_path);
             if (detect_cpu_changes(current_cpu_usages)) {
-                std::cout << "\nотправка CPU";
+                std::cout << "\n CPU не отправляем (нет нод)";
                 send_cpu_metrics(opcClient, current_cpu_usages);
             }
 
@@ -1847,6 +1752,7 @@ int main() {
             auto disk_info = collect_disk_usage(config_path);
             auto changed_disks = find_changed_disks(disk_info);
 
+            std::cout << "\nПусто ли в дисках: " << changed_disks.empty();
             if (!changed_disks.empty()) {
                 std::cout << "\nотправка disks";
                 send_full_disk_metrics(opcClient, changed_disks);
@@ -1854,10 +1760,11 @@ int main() {
 
             // RAM  ----------------------------
 
-            RAMUsageData current_ram = collect_ram_usage();
-            if (is_ram_data_changed(current_ram)) {
+            load_ram_config(config_path);
+            RAMState current_ram = collect_ram_usage();
+            if (is_ram_changed(current_ram)) {
                 std::cout << "\nотправка ram";
-                send_ram_metrics(opcClient, current_ram, config_path);
+                send_ram_metrics(opcClient, current_ram);
             }
 
             // Processes -----------------------
