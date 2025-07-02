@@ -1,0 +1,84 @@
+<root>
+<AvDiagnostics>
+
+    <CPUs>
+        <CPU number="0" node="ARM.cpu0" type="INT"/>
+        <CPU number="1" node="ARM.cpu1" type="INT"/>
+    </CPUs>
+
+    <Processes node="ARM.software_is_run" type="BOOL" logic="AND">
+        <Process name="fly-dm"/>
+        <Process name="fly"/>
+        <Process name="kate"/>
+    </Processes>
+
+    <IPs node="ARM.osn_link_is_ok" type="BOOL" logic="AND">
+        <IP address="127.0.0.1"/>
+        <IP address="localhost"/>
+        <IP address="192.168.6.254"/>
+    </IPs>
+
+    <IPs node="ARM.rez_link_is_ok" type="BOOL" logic="OR">
+        <IP address="192.168.255.3"/>
+        <IP address="192.168.255.2"/>
+    </IPs>
+
+    <GRDKeys>
+        <Key product="AvComponents" node="ARM.license_key_installed" type="BOOL"/>
+    </GRDKeys>
+
+    <Disks>
+        <Disk name="/" node_total="ARM.disk0.total" type_total="REAL"
+              node_units_total="ARM.disk0.total_units" type_units_total="STRING"
+              units_total="ГБ" precision_total="2"
+
+              node_used="ARM.disk0.used" type_used="REAL"
+              node_units_used="ARM.disk0.used_units" type_units_used="STRING"
+              units_used="МБ" precision_used="2"
+
+              node_available="ARM.disk0.free" type_available="REAL"
+              node_units_available="ARM.disk0.free_units" type_units_available="STRING"
+              units_available="МБ" precision_available="2"
+
+              node_file_system="ARM.disk0.file_system" type_file_system="STRING"
+              node_mount_point="ARM.disk0.mount_point" type_mount_point="STRING"
+              node_percent="ARM.disk0.used_percent" type_percent="INT"/>
+
+        <Disk name="/dev" node_total="ARM.disk1.total" type_total="REAL"
+              node_units_total="ARM.disk1.total_units" type_units_total="STRING"
+              units_total="МБ" precision_total="2"
+
+              node_used="ARM.disk1.used" type_used="REAL"
+              node_units_used="ARM.disk1.used_units" type_units_used="STRING"
+              units_used="МБ" precision_used="2"
+
+              node_available="ARM.disk1.free" type_available="REAL"
+              node_units_available="ARM.disk1.free_units" type_units_available="STRING"
+              units_available="МБ" precision_available="2"
+
+              node_file_system="ARM.disk1.file_system" type_file_system="STRING"
+              node_mount_point="ARM.disk1.mount_point" type_mount_point="STRING"
+              node_percent="ARM.disk1.used_percent" type_percent="INT"/>
+
+    </Disks>
+
+    <RAM>
+        <TotalRAM node="ARM.RAM.total" type="REAL" precision="2"/>
+
+        <UsedRAM node="ARM.RAM.used" type="REAL" precision="2"/>
+
+        <FreeRAM node="ARM.RAM.free" type="REAL" precision="2"/>
+
+    </RAM>
+
+    <RAIDs>
+        <RAID name="md0" node_status="ARM.RAID.status" type_status="STRING"
+              node_state="ARM.RAID.is_ok" type_state="BOOL"/>
+    </RAIDs>
+
+    <OPC>
+        <Server address="192.168.6.136" port="62544"/>
+    </OPC>
+
+</AvDiagnostics>
+</root>
