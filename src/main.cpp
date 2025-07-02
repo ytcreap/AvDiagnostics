@@ -536,15 +536,7 @@ std::string get_filesystem_type(long f_type) {
 std::map<std::string, DiskUsageData> collect_disk_usage(const std::string& config_path = "config.xml") {
     std::map<std::string, DiskUsageData> current_data;
 
-    // Загружаем конфигурацию при первом вызове
-    static bool config_loaded = false;
-    if (!config_loaded) {
-        if (load_disk_configs(config_path)) {
-            config_loaded = true;
-        } else {
-            return current_data;
-        }
-    }
+        load_disk_configs(config_path);
 
     for (const auto& [name, _] : disk_configs) {
         struct statvfs stat;
@@ -565,7 +557,6 @@ std::map<std::string, DiskUsageData> collect_disk_usage(const std::string& confi
                     data.file_system = get_filesystem_type(fs_info.f_type);
                 } else {
                     data.file_system = "unknown";
-                    std::cerr << "Ошибка statfs для " << name << ": " << strerror(errno) << std::endl;
                 }
 
                 data.mount_point = name;
@@ -609,13 +600,14 @@ std::vector<std::pair<std::string, DiskUsageData>> find_changed_disks(
 double convert_units(uint64_t bytes, const std::string& units, int precision) {
     double result = static_cast<double>(bytes);
 
-    std::cout << "\nbytes: " << bytes << " units: " << units << " preci: " << precision;
     if (units == "ГБ") {
         result /= (1024.0 * 1024 * 1024);
     } else if (units == "МБ") {
         result /= (1024.0 * 1024);
     } else if (units == "КБ") {
         result /= 1024.0;
+    } else if (units == "Б") {
+        result = result;
     }
 
     double multiplier = pow(10, precision);
@@ -652,7 +644,6 @@ void send_full_disk_metrics(
     if (changed_disks.empty()) {
         return;
     }
-    std::cout << "\nмы прошли?\n";
 
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
@@ -691,7 +682,7 @@ void send_full_disk_metrics(
         }
 
         if (!cfg.node_available.empty()) {
-            send_disk_metric(opcClient, cfg.node_available, cfg.type_available, data.available, writeConfigs);
+            send_disk_metric(opcClient, cfg.node_available, cfg.type_available, convert_units(data.available, cfg.units_available, cfg.precision_available), writeConfigs);
 
             if (!cfg.node_units_available.empty()) {
                 OpcUaClient::WriteConfig units_cfg;
@@ -726,9 +717,6 @@ void send_full_disk_metrics(
             send_disk_metric(opcClient, cfg.node_percent, cfg.type_percent, data.use_percent, writeConfigs);
         }
     }
-
-    std::cout << "\nwriteconfigs пустой?" << writeConfigs.empty();
-    std::cout << "\nА подключение? " << opcClient.CheckConnection();
     if (!writeConfigs.empty()) {
         opcClient.Write(writeConfigs);
     }
@@ -838,11 +826,7 @@ bool is_ram_changed(const RAMState& current) {
 void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
-    std::cout << "\ncfg: " << ram_config.node_total << " : " << ram_config.type_total;
-    // Конвертация значений в ГБ (по умолчанию)
-    auto convert_to_gb = [](unsigned long long kb, int precision) {
-        return static_cast<float>(kb);
-    };
+
 
     // Total RAM
     if (!ram_config.node_total.empty()) {
@@ -851,7 +835,7 @@ void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
         cfg.node_id = ram_config.node_total;
         cfg.type = ram_config.type_total;
 
-        float value = convert_to_gb(data.total_kb, ram_config.precision_total);
+        float value = convert_units(data.total_kb, "КБ", ram_config.precision_total);
         if (ram_config.type_total == "INT") {
             cfg.value.i = static_cast<int>(value);
         } else {
@@ -867,7 +851,7 @@ void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
         cfg.node_id = ram_config.node_used;
         cfg.type = ram_config.type_used;
 
-        float value = convert_to_gb(data.used_kb, ram_config.precision_used);
+        float value = convert_units(data.used_kb, "КБ", ram_config.precision_used);
         if (ram_config.type_used == "INT") {
             cfg.value.i = static_cast<int>(value);
         } else {
@@ -883,7 +867,7 @@ void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
         cfg.node_id = ram_config.node_free;
         cfg.type = ram_config.type_free;
 
-        float value = convert_to_gb(data.free_kb, ram_config.precision_free);
+        float value = convert_units(data.free_kb, "КБ", ram_config.precision_free);
         if (ram_config.type_free == "INT") {
             cfg.value.i = static_cast<int>(value);
         } else {
@@ -893,7 +877,6 @@ void send_ram_metrics(OpcUaClient& opcClient, const RAMState& data) {
     }
 
     //std::cout << "\n node: " << writeConfigs[0].node_id << "\n type" << writeConfigs[0].type << "\n value" << writeConfigs[0].value.f;
-    std::cout << "\nПусто RAM " << writeConfigs.empty() << " | " << !opcClient.CheckConnection();
     if (!writeConfigs.empty()) {
         opcClient.Write(writeConfigs);
         last_sent_ram = data;
@@ -1110,9 +1093,9 @@ std::map<std::string, RaidState> collect_raid_states(const std::string& config_p
 
     // Регулярные выражения
     std::regex raid_regex(R"(^(md\d+)\s*:.*)");
-    std::regex state_regex(R"(\[([U_/]+)\])");  // Состояние дисков: [UU], [U_], [3/3]
+    std::regex state_regex(R"(\[([U_/]+)\])");
     std::regex rebuild_regex(R"((recovery|resync)\s*=\s*(\d+\.\d+)%)");
-    std::regex active_regex(R"(active\s+(raid\d+))");
+    std::regex degraded_regex(R"(\[(.*_.*)\])");
 
     while (std::getline(mdstat, line)) {
         std::smatch match;
@@ -1133,28 +1116,36 @@ std::map<std::string, RaidState> collect_raid_states(const std::string& config_p
             state.state = false;
             state.rebuild_percent = -1;
 
-            // Проверка состояния дисков
-            if (std::regex_search(line, match, state_regex)) {
-                std::string disk_state = match[1];
-                if (disk_state.find('_') != std::string::npos) {
-                    state.status = "degraded";
-                } else {
-                    state.status = "optimal";
-                    state.state = true;
-                }
+            // Первичная проверка состояния
+            if (line.find("active") != std::string::npos) {
+                state.status = "active";
+                state.state = true;
             } else {
-                state.status = "unknown";
+                state.status = "inactive";
             }
 
             current_states[current_raid] = state;
-            continue;
         }
 
-        // Обработка секции восстановления
+        // Обработка состояния в последующих строках секции RAID
         if (in_raid_section && !current_raid.empty()) {
-            if (std::regex_search(line, match, rebuild_regex)) {
+            // Проверка на degraded состояние
+            if (std::regex_search(line, match, degraded_regex)) {
+                current_states[current_raid].status = "degraded";
+                current_states[current_raid].state = false;
+            }
+            // Проверка нормального состояния [UU]
+            else if (std::regex_search(line, match, state_regex)) {
+                std::string disk_state = match[1];
+                if (disk_state.find('_') == std::string::npos) {
+                    current_states[current_raid].status = "optimal";
+                    current_states[current_raid].state = true;
+                }
+            }
+            // Обработка восстановления
+            else if (std::regex_search(line, match, rebuild_regex)) {
                 current_states[current_raid].rebuild_percent = std::stod(match[2]);
-                current_states[current_raid].status = "rebuilding " + std::string(match[2]) + "%";
+                current_states[current_raid].status = "rebuilding " + match[2].str() + "%";
                 current_states[current_raid].state = false;
             }
         }
@@ -1244,13 +1235,12 @@ std::map<std::string, RaidState> detect_raid_changes(
 void send_raid_metrics(OpcUaClient& opcClient,
     const std::map<std::string, RaidState>& changed) {
 
-    if (changed.empty()) {std::cout << "\nизменения пустые у рейда"; return;}
+    if (changed.empty()) {return;}
 
 
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
     for (const auto& [name, state] : changed) {
-        std::cout << "\nnama " << name << "\n";
         auto config_it = raid_config.raid_configs.find(name);
         if (config_it == raid_config.raid_configs.end()) continue;
 
@@ -1260,7 +1250,6 @@ void send_raid_metrics(OpcUaClient& opcClient,
         status_cfg.node_id = config_it->second.node_status;
         status_cfg.type = config_it->second.type_status;
         status_cfg.value.s = state.status;
-        std::cout << "\nRaid Status node " << status_cfg.node_id << " | " << status_cfg.value.s;
         writeConfigs.push_back(status_cfg);
 
         // Исправность
@@ -1277,30 +1266,11 @@ void send_raid_metrics(OpcUaClient& opcClient,
                 health_cfg.value.f = static_cast<float>(state.state);
             }
 
+        writeConfigs.push_back(health_cfg);;
 
-        std::cout << "\nRaid bool node " << health_cfg.node_id << " | " << health_cfg.value.i;
-        writeConfigs.push_back(health_cfg);
-        std::cout << "\n\nwriteconf: " << writeConfigs[0].node_id << ", " << writeConfigs[1].node_id;
-
-//        // Процент восстановления
-//        if (state.rebuild_percent >= 0 && !config_it->second.node_rebuild.empty()) {
-//            OpcUaClient::WriteConfig rebuild_cfg;
-//            rebuild_cfg.allowed = true;
-//            rebuild_cfg.node_id = config_it->second.node_rebuild;
-//            rebuild_cfg.type = config_it->second.type_rebuild;
-
-//            if (config_it->second.type_rebuild == "INT") {
-//                rebuild_cfg.value.i = static_cast<int>(state.rebuild_percent);
-//            } else {
-//                rebuild_cfg.value.f = state.rebuild_percent;
-//            }
-
-//            writeConfigs.push_back(rebuild_cfg);
-//        }
     }
 
     if (!writeConfigs.empty()) {
-        std::cout << "\nСЮда?";
         opcClient.Write(writeConfigs);
 
         for (const auto& [name, state] : changed) {
@@ -1689,7 +1659,6 @@ int main() {
     const std::string config_path = "config.xml";
     tinyxml2::XMLDocument doc;
     if (doc.LoadFile(config_path.c_str()) != tinyxml2::XML_SUCCESS) {
-        std::cerr << "Ошибка загрузки файла конфигурации" << std::endl;
         return 1;
     }
 
@@ -1714,8 +1683,8 @@ int main() {
 
     // Инициализация OPC-клиента с параметрами из XML
     OpcUaClient opcClient(opc_address, opc_port);
-    std::cout << "\nOPC "
-              << opc_address << ":" << opc_port << std::endl;
+    //std::cout << "\nOPC "
+              //<< opc_address << ":" << opc_port << std::endl;
     IpChecker ip_checker;
     ip_checker.load_ips_from_xml();
 
@@ -1744,17 +1713,15 @@ int main() {
 
             auto current_cpu_usages = collect_cpu_usages(config_path);
             if (detect_cpu_changes(current_cpu_usages)) {
-                std::cout << "\n CPU не отправляем (нет нод)";
+            //    std::cout << "\n CPU отправляем";
                 send_cpu_metrics(opcClient, current_cpu_usages);
             }
 
             // Disks ----------------------------
             auto disk_info = collect_disk_usage(config_path);
             auto changed_disks = find_changed_disks(disk_info);
-
-            std::cout << "\nПусто ли в дисках: " << changed_disks.empty();
             if (!changed_disks.empty()) {
-                std::cout << "\nотправка disks";
+            //    std::cout << "\nотправка disks";
                 send_full_disk_metrics(opcClient, changed_disks);
             }
 
@@ -1763,7 +1730,7 @@ int main() {
             load_ram_config(config_path);
             RAMState current_ram = collect_ram_usage();
             if (is_ram_changed(current_ram)) {
-                std::cout << "\nотправка ram";
+            //    std::cout << "\nотправка ram";
                 send_ram_metrics(opcClient, current_ram);
             }
 
@@ -1771,7 +1738,7 @@ int main() {
 
             auto current_processes = collect_process_states(config_path);
             if (detect_process_changes(current_processes)) {
-                std::cout << "\nотправка processes";
+            //    std::cout << "\nотправка processes";
 
                 send_process_metrics(opcClient, current_processes);
             }
@@ -1781,7 +1748,7 @@ int main() {
             auto current_raids = collect_raid_states(config_path);
             auto changed_raids = detect_raid_changes(current_raids);
             if (!changed_raids.empty()) {
-                std::cout << "\nотправка RAID";
+            //    std::cout << "\nотправка RAID";
                 send_raid_metrics(opcClient, changed_raids);
             }
 
@@ -1790,7 +1757,7 @@ int main() {
 
             auto changed_ips = detect_ip_changes(current_ips);
             if (!changed_ips.empty()) {
-                std::cout << "\nотправка ip";
+            //    std::cout << "\nотправка ip";
                 send_ip_metrics(opcClient, changed_ips);
             }
         }
@@ -1823,8 +1790,6 @@ int main() {
             guardant_check_running = false;
         }
 
-        // Задержка для снижения нагрузки
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     return 0;
 }

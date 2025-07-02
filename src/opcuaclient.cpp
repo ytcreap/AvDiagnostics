@@ -5,7 +5,6 @@ bool OpcUaClient::Connect() {
 
     char* opc_url = strdup(url.c_str());
     UA_StatusCode status_code = UA_Client_connect(client_, opc_url);
-    std::cerr << "\nurl: " << opc_url;
     free(opc_url);
 
 
@@ -199,12 +198,11 @@ void OpcUaClient::Write(WriteConfig& config) {
 void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
     size_t data_count = configs.size();
 
-    // Динамический массив для WriteValue
     std::vector<UA_WriteValue> items;
     items.reserve(data_count);
 
     for (size_t i = 0; i < data_count; i++) {
-        // Проверка типа и allowed
+
         if (types_.find(configs[i].type) != types_.end() && configs[i].allowed) {
             configs[i].allowed = false;
 
@@ -215,9 +213,8 @@ void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
             item.attributeId = UA_ATTRIBUTEID_VALUE;
             item.value.hasValue = true;
 
-            std::cout << "\n\nNode: " << configs[i].node_id << " type: " << configs[i].type << " value: " << configs[i].value.i;
+            //std::cout << "\n\nNode: " << configs[i].node_id << " type: " << configs[i].type << " value: " << configs[i].value.i;
 
-            // Заполняем значение в зависимости от типа
             if (configs[i].type == "INT") {
                 UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.i, &UA_TYPES[UA_TYPES_INT16]);
             } else if (configs[i].type == "DINT") {
@@ -231,21 +228,19 @@ void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
             } else if (configs[i].type == "REAL") {
                 UA_Variant_setScalarCopy(&item.value.value, &configs[i].value.f, &UA_TYPES[UA_TYPES_FLOAT]);
             } else if (configs[i].type == "STRING") {
-                std::cout << "\nString to send: " << configs[i].value.s << std::endl;
                 UA_String uaStr = UA_STRING_ALLOC(configs[i].value.s.c_str());
                 UA_Variant_setScalarCopy(&item.value.value, &uaStr, &UA_TYPES[UA_TYPES_STRING]);
-                UA_String_clear(&uaStr); // Очищаем временный UA_String
+                UA_String_clear(&uaStr);
             } else {
-                continue; // Неизвестный тип, пропускаем
+                continue;
             }
-            std::cout << "\nвещь!";
+            //std::cout << "\nвещь!";
             items.push_back(item);
         }
     }
 
-    // Если нечего писать, выходим
     if (items.empty())
-    {std::cout << "\nчё пусто чтоли";
+    {
         return;}
 
     UA_WriteRequest request;
@@ -253,7 +248,6 @@ void OpcUaClient::Write(std::vector<WriteConfig>& configs) {
     request.nodesToWrite = items.data();
     request.nodesToWriteSize = static_cast<size_t>(items.size());
 
-    std::cout << "\nОтправка в OPC!";
     UA_WriteResponse response = UA_Client_Service_write(client_, request);
 
     if (response.responseHeader.serviceResult != UA_STATUSCODE_GOOD) {

@@ -21,6 +21,7 @@ public:
 
         UA_ClientConfig* config = UA_Client_getConfig(client_);
         UA_ClientConfig_setDefault(UA_Client_getConfig(client_));
+        config->logger = UA_Log_Stdout_withLevel(UA_LOGLEVEL_FATAL);
 
         UA_Client_run_iterate(client_, 100);
 
