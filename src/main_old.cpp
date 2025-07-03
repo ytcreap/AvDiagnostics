@@ -1,11 +1,47 @@
+#include <QCoreApplication>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <thread>
+#include <chrono>
+#include <iostream>
+#include <regex>
+#include <iomanip>
+#include <limits>
+#include <unordered_map>
+#include <sys/statvfs.h>
+#include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include "tinyxml2.h"
 #include "avlicensing.h"
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <future>
 #include "opcuaclient.h"
-#include "avdiagnostics.h"
+#include <sys/statfs.h>
 
 std::atomic<bool> running{true};
 std::mutex result_mutex;
 
+struct RaidStatus {
+    bool exists;    // state: false/true
+    std::string status; // "optimal", "degraded" или "rebuilding (X%)"
+};
+
+struct Memory {
+    float total;
+    float used;
+    float free;
+    short used_percent;
+};
+
+struct CpuTimes {
+    unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
+    unsigned long long total() const {
+        return user + nice + system + idle + iowait + irq + softirq + steal;
+    }
+};
 
 // Чтение времени CPU
 std::vector<CpuTimes> read_cpu_times() {
@@ -192,7 +228,10 @@ std::vector<std::string> ExtractAllProductNames(const char* json);
 
 // ----------------- CPU --------------------
 
-
+struct CPUConfig {
+    std::map<std::string, std::string> cpu_nodes; // key: "CPU0", "CPU1", etc., value: node_id from XML
+    std::string type = "INT"; // default type
+};
 
 CPUConfig cpu_config;
 std::map<std::string, int> last_sent_cpu_usages;
@@ -1373,7 +1412,7 @@ std::map<std::string, IpState> detect_ip_changes(
 
 // 3. Функция отправки в OPC UA
 struct IpConfig {
-    std::map<std::string, std::pair<std::string, std::string>> ip_configs; // <address, <node_id, type>>
+    std::map<std::string, std::pair<std::string, std::string>> ip_configs;
 };
 
 IpConfig ip_config;
@@ -1602,18 +1641,24 @@ bool TimePassed(std::chrono::steady_clock::time_point& last, std::chrono::second
 }
 
 int main() {
-
-    // Инициализация времени последних проверок
+    // Инициализация временных меток
     auto last_fast = std::chrono::steady_clock::now();
     auto last_xml = last_fast;
     auto last_opc_send = last_fast;
     auto last_guardant_start = last_fast;
 
-    // отметки для асинхронных задач
+
+    // Асинхронные задачи
     std::future<GuardantState> guardant_future;
     std::atomic<bool> guardant_check_running{false};
 
-
+    // Контейнеры данных
+    // Загрузка конфигурации OPC из XML
+    const std::string config_path = "config.xml";
+    tinyxml2::XMLDocument doc;
+    if (doc.LoadFile(config_path.c_str()) != tinyxml2::XML_SUCCESS) {
+        return 1;
+    }
 
     // Получение параметров OPC-сервера
     std::string opc_address = "192.168.6.72";

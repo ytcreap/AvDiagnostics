@@ -15,11 +15,14 @@ set(HEADERS
     ${HEADER_DIR}/avlicensing.h
     ${HEADER_DIR}/opcuaclient.h
     ${HEADER_DIR}/tinyxml2.h
+    ${HEADER_DIR}/avdiagnostics.h
 )
 
 set(SOURCES
     ${SOURCE_DIR}/industrialprotocolutils.cpp
     ${SOURCE_DIR}/main.cpp
+    ${SOURCE_DIR}/main_old.cpp
+    ${SOURCE_DIR}/avdiagnostics.cpp
     ${SOURCE_DIR}/tinyxml2.cpp
     ${SOURCE_DIR}/opcuaclient.cpp
     ${SOURCE_DIR}/avlicensing.cpp
