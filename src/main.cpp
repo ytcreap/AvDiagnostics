@@ -1643,12 +1643,10 @@ bool time_passed(std::chrono::steady_clock::time_point& last, std::chrono::secon
 int main() {
     // Инициализация временных меток
     auto last_fast = std::chrono::steady_clock::now();
+    auto last_xml = last_fast;
     auto last_opc_send = last_fast;
     auto last_guardant_start = last_fast;
 
-    // Интервалы
-    const std::chrono::seconds fast_interval(1);
-    const std::chrono::seconds guardant_interval(10);
 
     // Асинхронные задачи
     std::future<GuardantState> guardant_future;
@@ -1665,7 +1663,7 @@ int main() {
     // Получение параметров OPC-сервера
     std::string opc_address = "192.168.6.72";
     int opc_port = 62544;
-
+    int interval=1;
     if (auto* root = doc.FirstChildElement("root")) {
         if (auto* av_diag = root->FirstChildElement("AvDiagnostics")) {
             if (auto* opc = av_diag->FirstChildElement("OPC")) {
@@ -1674,12 +1672,18 @@ int main() {
                         if (const char* port = server->Attribute("port")) {
                             opc_port = std::stoi(port);
                             opc_address = address;
+
                         }
                     }
                 }
             }
         }
     }
+
+    // Интервалы
+    const std::chrono::seconds xml_interval(5);
+    std::chrono::seconds fast_interval(1);
+    const std::chrono::seconds guardant_interval(60);
 
     // Инициализация OPC-клиента с параметрами из XML
     OpcUaClient opcClient(opc_address, opc_port);
@@ -1690,12 +1694,27 @@ int main() {
 
 
 
-    // Создание переменных для grd
-    doc.LoadFile(config_path.c_str());
-
     while (true) {
 
+        doc.LoadFile(config_path.c_str());
         auto now = std::chrono::steady_clock::now();
+
+        // ================ XML обновление ====================
+        if (time_passed(last_xml, xml_interval)) {
+            if (auto* root = doc.FirstChildElement("root")) {
+                if (auto* av_diag = root->FirstChildElement("AvDiagnostics")) {
+                    if (auto* opc = av_diag->FirstChildElement("OPC")) {
+                        if (auto* server = opc->FirstChildElement("Server")) {
+                            if (const char* send_interval = server->Attribute("send_interval")) {
+                            interval = std::stoi(send_interval);
+                            }
+                        }
+                    }
+                }
+            }
+
+            fast_interval = std::chrono::seconds(interval);
+        }
 
         // ============= БЫСТРЫЕ ПРОВЕРКИ (1 сек) =============
         if (time_passed(last_fast, fast_interval)) {
@@ -1704,8 +1723,6 @@ int main() {
             ip_checker.load_ips_from_xml();
             ip_checker.check_ips();
         }
-
-
 
         // ============= ОТПРАВКА В OPC UA (1 сек) =============
         if (time_passed(last_opc_send, fast_interval)) {
