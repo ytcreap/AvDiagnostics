@@ -20,7 +20,7 @@ public:
         client_ = UA_Client_new();
 
         UA_ClientConfig* config = UA_Client_getConfig(client_);
-        config->logger = UA_Log_Stdout_withLevel(UA_LOGLEVEL_FATAL);
+        *config->logging = UA_Log_Stdout_withLevel(UA_LOGLEVEL_FATAL);
         UA_ClientConfig_setDefault(UA_Client_getConfig(client_));
 
 
