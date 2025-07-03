@@ -77,7 +77,7 @@
     </RAIDs>
 
     <OPC>
-        <Server address="192.168.6.136" port="62544" send_interval="100"/>
+        <Server address="192.168.6.136" port="62544" send_interval="10"/>
     </OPC>
 
 </AvDiagnostics>
