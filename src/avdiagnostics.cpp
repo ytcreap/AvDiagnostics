@@ -23,7 +23,7 @@ tinyxml2::XMLElement* AvDiagnostics::getXmlRoot()
 
 int AvDiagnostics::checkXml()
 {
-    // проверка xml
+    // проверка xml TODO
     return 1;
 }
 
@@ -115,7 +115,7 @@ std::vector<double> AvDiagnostics::getCpuUsage() {
     return usages;
 }
 
-std::map<std::string, int> AvDiagnostics::collectCpuUsage()
+bool AvDiagnostics::collectCpuUsage()
 {
 
     auto cpu_usages_vec = getCpuUsage();
@@ -127,20 +127,20 @@ std::map<std::string, int> AvDiagnostics::collectCpuUsage()
             current_usages[cpu_index] = static_cast<int>(cpu_usages_vec[i]);
         }
     }
-
-    return current_usages;
+    current_cpu_usages_ = current_usages;
+    return 1;
 }
 
 
-bool AvDiagnostics::checkForCpuChanges(const std::map<std::string, int>& current_usages)
+bool AvDiagnostics::checkForCpuChanges()
 {
     const int threshold = 1;
 
-    if (last_sent_cpu_usages_.size() != current_usages.size()) {
+    if (last_sent_cpu_usages_.size() != current_cpu_usages_.size()) {
         return true;
     }
 
-    for (const auto& [cpu, usage] : current_usages) {
+    for (const auto& [cpu, usage] : current_cpu_usages_) {
         auto it = last_sent_cpu_usages_.find(cpu);
         if (it == last_sent_cpu_usages_.end() || abs(it->second - usage) > threshold) {
             return true;
@@ -151,11 +151,11 @@ bool AvDiagnostics::checkForCpuChanges(const std::map<std::string, int>& current
 
 
 
-bool AvDiagnostics::sendCpuUsage(OpcUaClient& opcClient, const std::map<std::string, int>& current_usages)
+bool AvDiagnostics::sendCpuUsage(OpcUaClient& opcClient)
 {
     std::vector<OpcUaClient::WriteConfig> writeConfigs;
 
-    for (const auto& [cpu_name, usage] : current_usages) {
+    for (const auto& [cpu_name, usage] : current_cpu_usages_) {
         auto node_it = cpu_nodes_.find(cpu_name);
         if (node_it != cpu_nodes_.end()) {
             OpcUaClient::WriteConfig config;
@@ -178,7 +178,7 @@ bool AvDiagnostics::sendCpuUsage(OpcUaClient& opcClient, const std::map<std::str
 
     if (!writeConfigs.empty()) {
            opcClient.Write(writeConfigs);
-           last_sent_cpu_usages_ = current_usages;
+           last_sent_cpu_usages_ = current_cpu_usages_;
            return 1;
        }
     return 0;
@@ -198,7 +198,6 @@ bool AvDiagnostics::loadDiskConfigs() {
         DiskConfig cfg;
         const char* name = disk->Attribute("name");
 
-        // Загрузка конфигурации для total
         if (disk->Attribute("node_total")) cfg.node_total = disk->Attribute("node_total");
         if (disk->Attribute("type_total")) cfg.type_total = disk->Attribute("type_total");
         if (disk->Attribute("node_units_total")) cfg.node_units_total = disk->Attribute("node_units_total");
@@ -207,7 +206,6 @@ bool AvDiagnostics::loadDiskConfigs() {
             cfg.precision_total = 0;
         }
 
-        // Загрузка конфигурации для used
         if (disk->Attribute("node_used")) cfg.node_used = disk->Attribute("node_used");
         if (disk->Attribute("type_used")) cfg.type_used = disk->Attribute("type_used");
         if (disk->Attribute("node_units_used")) cfg.node_units_used = disk->Attribute("node_units_used");
@@ -216,7 +214,6 @@ bool AvDiagnostics::loadDiskConfigs() {
             cfg.precision_used = 0;
         }
 
-        // Загрузка конфигурации для available
         if (disk->Attribute("node_available")) cfg.node_available = disk->Attribute("node_available");
         if (disk->Attribute("type_available")) cfg.type_available = disk->Attribute("type_available");
         if (disk->Attribute("node_units_available")) cfg.node_units_available = disk->Attribute("node_units_available");
@@ -225,7 +222,6 @@ bool AvDiagnostics::loadDiskConfigs() {
             cfg.precision_available = 0;
         }
 
-        // Загрузка конфигурации для percent
         if (disk->Attribute("node_percent")) cfg.node_percent = disk->Attribute("node_percent");
         if (disk->Attribute("type_percent")) cfg.type_percent = disk->Attribute("type_percent");
 
@@ -241,7 +237,7 @@ bool AvDiagnostics::loadDiskConfigs() {
     return !disk_configs_.empty();
 }
 
-std::map<std::string, AvDiagnostics::DiskUsageData> AvDiagnostics::collectDiskUsage() {
+void AvDiagnostics::collectDiskUsage() {
 
     std::map<std::string, DiskUsageData> current_data;
 
@@ -269,37 +265,34 @@ std::map<std::string, AvDiagnostics::DiskUsageData> AvDiagnostics::collectDiskUs
 
                 data.mount_point = name;
 
-        current_data[name] = data;
+        current_disk_usage_[name] = data;
     }
-
-    return current_data;
 }
 
 
-bool AvDiagnostics::HasDiskChanged(const DiskUsageData& old_data, const DiskUsageData& new_data) {
+bool AvDiagnostics::hasDiskChanged(const DiskUsageData& old_data, const DiskUsageData& new_data) {
     return (old_data.use_percent != new_data.use_percent ||
             old_data.used != new_data.used ||
             old_data.total != new_data.total);
 }
 
-std::vector<std::pair<std::string, DiskUsageData>> find_changed_disks(
-    const std::map<std::string, DiskUsageData>& current_data)
+std::vector<std::pair<std::string, AvDiagnostics::DiskUsageData>> AvDiagnostics::findChangedDisks()
 {
     std::vector<std::pair<std::string, DiskUsageData>> changed;
 
-    for (const auto& [mp, data] : current_data) {
-        auto it = last_sent_disk_usage.find(mp);
+    for (const auto& [mp, data] : current_disk_usage_) {
+        auto it = last_sent_disk_usage_.find(mp);
 
-        if (it == last_sent_disk_usage.end()) {
+        if (it == last_sent_disk_usage_.end()) {
 
             // Новый диск
             changed.emplace_back(mp, data);
-            last_sent_disk_usage[mp] = data;
-        } else if (has_disk_changed(it->second, data)) {
+            last_sent_disk_usage_[mp] = data;
+        } else if (hasDiskChanged(it->second, data)) {
 
             // Данные изменились
             changed.emplace_back(mp, data);
-            last_sent_disk_usage[mp] = data;
+            last_sent_disk_usage_[mp] = data;
         }
     }
 
@@ -380,3 +373,611 @@ void AvDiagnostics::sendFullDiskMetrics(
         opcClient.Write(writeConfigs);
     }
 }
+
+// RAM -------------------
+
+void AvDiagnostics::loadRamConfig() {
+
+    auto* root = getXmlRoot();
+    auto* av_diag = root->FirstChildElement("AvDiagnostics");
+    auto* ram = av_diag->FirstChildElement("RAM");
+
+    if (auto* total = ram->FirstChildElement("TotalRAM")) {
+        ram_config_.node_total = total->Attribute("node");
+        ram_config_.type_total = total->Attribute("type");
+        total->QueryIntAttribute("precision", &ram_config_.precision_total);
+    }
+
+    if (auto* used = ram->FirstChildElement("UsedRAM")) {
+        ram_config_.node_used = used->Attribute("node") ? used->Attribute("node") : "";
+        ram_config_.type_used = used->Attribute("type") ? used->Attribute("type") : "REAL";
+        used->QueryIntAttribute("precision", &ram_config_.precision_used);
+    }
+
+    if (auto* free = ram->FirstChildElement("FreeRAM")) {
+        ram_config_.node_free = free->Attribute("node") ? free->Attribute("node") : "";
+        ram_config_.type_free = free->Attribute("type") ? free->Attribute("type") : "REAL";
+        free->QueryIntAttribute("precision", &ram_config_.precision_free);
+    }
+}
+
+
+
+AvDiagnostics::RamState AvDiagnostics::collectRamUsage() {
+    RamState state;
+    std::array<char, 128> buffer;
+    std::string line;
+
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen("free -k | grep Mem:", "r"), pclose);
+    if (!pipe) return state;
+
+    if (fgets(buffer.data(), buffer.size(), pipe.get())) {
+        line = buffer.data();
+    }
+
+    state.last_update = std::time(nullptr);
+    return state;
+}
+
+
+bool AvDiagnostics::isRamChanged(const RamState& current) {
+    const unsigned long long threshold = 1024; // 1MB
+
+    return
+        std::abs(static_cast<long>(current.total - last_sent_ram_.total)) > threshold ||
+        std::abs(static_cast<long>(current.used - last_sent_ram_.used)) > threshold ||
+        std::abs(static_cast<long>(current.free - last_sent_ram_.free)) > threshold;
+}
+
+
+void AvDiagnostics::sendRamMetrics(OpcUaClient& opcClient, const RamState& data) {
+    std::vector<OpcUaClient::WriteConfig> writeConfigs;
+
+    // Total RAM
+    if (!ram_config_.node_total.empty()) {
+        OpcUaClient::WriteConfig cfg;
+        cfg.allowed = true;
+        cfg.node_id = ram_config_.node_total;
+        cfg.type = ram_config_.type_total;
+
+        float value = convertUnits(data.total, "КБ", ram_config_.precision_total);
+        if (ram_config_.type_total == "INT") {
+            cfg.value.i = static_cast<int>(value);
+        } else {
+            cfg.value.f = static_cast<float>(value);
+        }
+        writeConfigs.push_back(cfg);
+    }
+
+    // Used RAM
+    if (!ram_config_.node_used.empty()) {
+        OpcUaClient::WriteConfig cfg;
+        cfg.allowed = true;
+        cfg.node_id = ram_config_.node_used;
+        cfg.type = ram_config_.type_used;
+
+        float value = convertUnits(data.used, "КБ", ram_config_.precision_used);
+        if (ram_config_.type_used == "INT") {
+            cfg.value.i = static_cast<int>(value);
+        } else {
+            cfg.value.f = static_cast<float>(value);
+        }
+        writeConfigs.push_back(cfg);
+    }
+
+    // Free RAM
+    if (!ram_config_.node_free.empty()) {
+        OpcUaClient::WriteConfig cfg;
+        cfg.allowed = true;
+        cfg.node_id = ram_config_.node_free;
+        cfg.type = ram_config_.type_free;
+
+        float value = convertUnits(data.free, "КБ", ram_config_.precision_free);
+        if (ram_config_.type_free == "INT") {
+            cfg.value.i = static_cast<int>(value);
+        } else {
+            cfg.value.f = static_cast<float>(value);
+        }
+        writeConfigs.push_back(cfg);
+    }
+
+    //std::cout << "\n node: " << writeConfigs[0].node_id << "\n type" << writeConfigs[0].type << "\n value" << writeConfigs[0].value.f;
+    if (!writeConfigs.empty()) {
+        opcClient.Write(writeConfigs);
+        last_sent_ram_ = data;
+    }
+}
+
+// Processes --------------------
+
+std::map<std::string, std::vector<int>> getRunningProcesses() {
+    std::map<std::string, std::vector<int>> processes;
+
+    const char* cmd = "ps -e -o pid= -o comm=";
+    std::array<char, 256> buffer;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+    if (!pipe) {
+        return processes;
+    }
+
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        std::string line(buffer.data());
+        // line будет вида: "  1234 process\n"
+        size_t pos = line.find_first_not_of(' ');
+        if (pos == std::string::npos) continue;
+
+        size_t space_pos = line.find(' ', pos);
+        if (space_pos == std::string::npos) continue;
+
+        std::string pid_str = line.substr(pos, space_pos - pos);
+        std::string proc_name = line.substr(space_pos + 1);
+        proc_name.erase(proc_name.find_last_not_of(" \n\r\t") + 1);
+
+        int pid = std::stoi(pid_str);
+        processes[proc_name].push_back(pid);
+    }
+
+    return processes;
+}
+
+void AvDiagnostics::collectProcessStates() {
+    std::map<std::string, ProcessState> current_states;
+
+    auto* root = getXmlRoot();
+    auto* av_diag = root->FirstChildElement("AvDiagnostics");
+    auto running_processes = getRunningProcesses();
+
+    for (auto* processes = av_diag->FirstChildElement("Processes"); processes; processes = processes->NextSiblingElement("Processes")) {
+
+        const char* group_node = processes->Attribute("node");
+        const char* logic = processes->Attribute("logic");
+        const char* type = processes->Attribute("type");
+
+        if (!group_node || !type || (logic && std::string(logic) != "AND"))
+            continue;
+
+        std::vector<std::string> members;
+        for (auto* proc = processes->FirstChildElement("Process"); proc; proc = proc->NextSiblingElement("Process")) {
+
+            if (const char* name = proc->Attribute("name")) {
+                  members.push_back(name);
+            }
+        }
+
+        if (!members.empty()) {
+            bool all_running = true;
+            bool all_exist = true;
+
+            for (const auto& name : members) {
+                auto it = running_processes.find(name);
+                bool exists = (it != running_processes.end());
+                bool is_running = exists && !it->second.empty(); // Процесс работает, если есть хотя бы один PID
+
+                ProcessState state;
+                state.status = exists ? (is_running ? "RUNNING" : "NOT_RUNNING") : "NOT_EXIST";
+                current_states[name] = state;
+
+                if (!exists) {
+                     all_exist = false;
+                     all_running = false;
+                } else if (!is_running) {
+                     all_running = false;
+                }
+            }
+
+         ProcessState group_state;
+         group_state.status = (all_exist && all_running) ? "RUNNING" : "NOT_RUNNING";
+         group_state.is_group_result = true;
+         group_state.group_node = group_node;
+         group_state.value_type = type;
+         current_states[group_node] = group_state;
+         }
+     }
+    current_process_states_ = current_states;
+}
+
+bool AvDiagnostics::detectProcessChanges() {
+    for (const auto& [name, state] : current_process_states_) {
+        if (!state.is_group_result) continue;
+
+        auto it = last_sent_process_states_.find(name);
+        if (it == last_sent_process_states_.end() || it->second.status != state.status) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+void AvDiagnostics::sendProcessMetrics(OpcUaClient &opcClient) {
+
+    std::vector<OpcUaClient::WriteConfig> writes;
+
+    for (const auto& [name, state] : current_process_states_) {
+        if (!state.is_group_result) continue;
+
+        OpcUaClient::WriteConfig cfg;
+        cfg.node_id = state.group_node;
+        cfg.type = state.value_type;
+
+        if (state.value_type == "BOOL" || state.value_type == "INT") {
+            cfg.value.i = (state.status == "RUNNING") ? 1 : 0;
+        }
+        else if (state.value_type == "REAL") {
+            cfg.value.f = (state.status == "RUNNING") ? 1.0f : 0.0f;
+        }
+        else {
+            cfg.value.s = state.status;
+        }
+
+        writes.push_back(cfg);
+        last_sent_process_states_[name] = state;
+    }
+
+    if (!writes.empty() && opcClient.CheckConnection()) {
+        opcClient.Write(writes);
+    }
+}
+
+// RAID ------------------
+
+bool AvDiagnostics::loadRaidConfig()
+{
+
+    auto* root = getXmlRoot();
+    auto* av_diag = root->FirstChildElement("AvDiagnostics");
+    auto* raids = av_diag->FirstChildElement("RAIDs");
+    for (auto* raid = raids->FirstChildElement("RAID"); raid; raid = raid->NextSiblingElement("RAID")) {
+        const char* name = raid->Attribute("name");
+        if (!name) continue;
+
+        raid_configs_[name] = {
+            .node_status = raid->Attribute("node_status"),
+            .type_status = raid->Attribute("type_status"),
+            .node_state = raid->Attribute("node_state"),
+            .type_state = raid->Attribute("type_state"),
+        };
+    }
+
+    return !raid_configs_.empty();
+}
+
+
+void AvDiagnostics::collectRaidStates()
+{
+    for (const auto& [raid_name, config] : raid_configs_)
+    {
+        RaidState raid_status;
+        raid_status.is_ok = false;
+        raid_status.status = "";
+
+        if (raid_name == "Adaptec")
+        {
+            system("./arcconf getconfig 1 ld > result.txt");
+            std::ifstream file("result.txt");
+            std::string line;
+
+            while (std::getline(file, line))
+            {
+                if (line.find("Status") != std::string::npos)
+                {
+                    if (line.find("Optimal") != std::string::npos)
+                    {
+                        raid_status.is_ok = true;
+                    }
+                    else if (line.find("Degraded") != std::string::npos)
+                    {
+                        raid_status.is_ok = false;
+                    }
+
+                    raid_status.status = line.substr(line.find(": ") + 2);
+                    break;
+                }
+            }
+        }
+        else if (raid_name == "LSI")
+        {
+            system("megacli -LDInfo -LALL -aALL | grep State > result.txt");
+            std::ifstream file("result.txt");
+            std::string line;
+
+            while (std::getline(file, line))
+            {
+                if (line.find("State") != std::string::npos)
+                {
+                    if (line.find("Optimal") != std::string::npos)
+                    {
+                        raid_status.is_ok = true;
+                        raid_status.status = "Optimal";
+                        break;
+                    }
+                    else if (line.find("Degraded") != std::string::npos)
+                    {
+                        raid_status.is_ok = false;
+                        raid_status.status = "Degraded";
+                    }
+                }
+            }
+
+            if (raid_status.is_ok == false)
+            {
+                for (int dev = 0; dev <= 1; ++dev)
+                {
+                    std::string cmd = "megacli -PDRbld -showprog -PhysDrv[252:" + std::to_string(dev) + "] -aALL > result.txt";
+                    system(cmd.c_str());
+                    std::ifstream file1("result.txt");
+                    while (std::getline(file1, line))
+                    {
+                        if (line.find("Rebuild Progress on Device") != std::string::npos)
+                        {
+                            raid_status.status = line;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            raid_status.is_ok = false;
+            raid_status.status = "unknown";
+        }
+
+        current_raids_[raid_name] = raid_status;
+    }
+}
+
+std::map<std::string, AvDiagnostics::RaidState> AvDiagnostics::detectRaidChanges() {
+
+    static bool first_run = true;
+    std::map<std::string, RaidState> changed;
+
+
+    if (first_run) {
+        last_sent_raids_ = current_raids_;
+        first_run = false;
+        return current_raids_;
+    }
+
+
+    for (const auto& [name, current_state] : current_raids_) {
+        auto last_it = last_sent_raids_.find(name);
+
+        // Новый RAID
+        if (last_it == last_sent_raids_.end()) {
+            changed[name] = current_state;
+            continue;
+        }
+
+        // Сравнение состояний
+        const auto& last_state = last_it->second;
+        bool has_changes = false;
+
+        if (last_state.status != current_state.status) {
+            has_changes = true;
+        }
+
+        if (last_state.is_ok != current_state.is_ok) {
+            has_changes = true;
+        }
+
+        if (has_changes) {
+            changed[name] = current_state;
+        }
+    }
+
+    // Поиск удаленных RAID
+    for (const auto& [name, _] : last_sent_raids_) {
+        if (current_raids_.find(name) == current_raids_.end()) {
+            RaidState removed_state;
+            removed_state.status = "removed";
+            removed_state.is_ok = false;
+            changed[name] = removed_state;
+        }
+    }
+
+    return changed;
+}
+
+
+void AvDiagnostics::sendRaidMetrics(OpcUaClient& opcClient, const std::map<std::string, RaidState>& changed){
+
+    if (changed.empty()) {return;}
+
+
+    std::vector<OpcUaClient::WriteConfig> writeConfigs;
+
+    for (const auto& [name, state] : changed) {
+        auto config_it = raid_configs_.find(name);
+        if (config_it == raid_configs_.end()) continue;
+
+        // Статус RAID
+        OpcUaClient::WriteConfig status_cfg;
+        status_cfg.allowed = true;
+        status_cfg.node_id = config_it->second.node_status;
+        status_cfg.type = config_it->second.type_status;
+        status_cfg.value.s = state.status;
+        writeConfigs.push_back(status_cfg);
+
+        // Исправность
+        OpcUaClient::WriteConfig health_cfg;
+
+        health_cfg.allowed = true;
+        health_cfg.node_id = config_it->second.node_state;
+        health_cfg.type = config_it->second.type_state;
+            if (health_cfg.type == "STRING") {
+                health_cfg.value.s = std::to_string(state.is_ok);
+            } else if (health_cfg.type == "BOOL") {
+                health_cfg.value.b = state.is_ok;
+            } else {
+                health_cfg.value.f = static_cast<float>(state.is_ok);
+            }
+
+        writeConfigs.push_back(health_cfg);;
+
+    }
+
+    if (!writeConfigs.empty()) {
+        opcClient.Write(writeConfigs);
+
+        for (const auto& [name, state] : changed) {
+            if (state.status == "removed") {
+                last_sent_raids_.erase(name);
+            } else {
+                last_sent_raids_[name] = state;
+            }
+        }
+    }
+}
+
+// IP --------------------
+
+bool pingIp(const std::string& ip)
+{
+
+    std::string cmd = "ping -c 1 -W 1 " + ip + " >/dev/null 2>&1";
+    int ret = system(cmd.c_str());
+    return (ret == 0);
+}
+
+std::map<std::string, bool> AvDiagnostics::loadIps() {
+    std::map<std::string, bool> ip_status;
+    std::vector<std::pair<std::string, std::future<bool>>> async_checks;
+
+        auto* root = getXmlRoot();
+        auto* av_diag = root->FirstChildElement("AvDiagnostics");
+        for (auto* ips_xml = av_diag->FirstChildElement("IPs"); ips_xml; ips_xml = ips_xml->NextSiblingElement("IPs")) {
+            for (auto* ip = ips_xml->FirstChildElement("IP"); ip; ip = ip->NextSiblingElement("IP")) {
+                if (const char* addr = ip->Attribute("address")) {
+                    ip_status[addr] = false;
+                }
+            }
+        }
+
+    for (auto& [ip, status] : ip_status) {
+
+        int ping_result = system(("timeout 0.01 ping -c 1 " + ip + " >/dev/null 2>&1").c_str());
+        if (ping_result == 0) {
+            status = true;
+
+        } else
+        {
+            std::string ip_async = ip;
+            async_checks.emplace_back(ip_async, std::async(std::launch::async, [ip_async]() {
+            return pingIp(ip_async);
+        }));
+        }
+    }
+
+    for (auto& [ip, future] : async_checks) {
+        if (future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            ip_status[ip] = future.get();
+        }
+    }
+
+    return ip_status;
+}
+
+
+std::map<std::string, AvDiagnostics::IpState> AvDiagnostics::collectIpStates() {
+    std::map<std::string, IpState> current_states;
+    std::map<std::string, std::pair<std::vector<std::string>, std::string>> ip_groups;
+
+    auto* root = getXmlRoot();
+    auto* av_diag = root->FirstChildElement("AvDiagnostics");
+    for (auto* ips = av_diag->FirstChildElement("IPs"); ips; ips = ips->NextSiblingElement("IPs")) {
+         const char* logic = ips->Attribute("logic");
+         const char* group_node = ips->Attribute("node");
+         const char* group_type = ips->Attribute("type");
+
+         if (!group_node || !group_type) continue;
+
+         std::vector<std::string> group_ips;
+         for (auto* ip = ips->FirstChildElement("IP"); ip; ip = ip->NextSiblingElement("IP")) {
+             if (const char* address = ip->Attribute("address")) {
+                  group_ips.push_back(address);
+             }
+         }
+
+         if (!group_ips.empty()) {
+             ip_groups[group_node] = {group_ips, logic ? logic : "AND"};
+         }
+     }
+
+    auto ip_status = loadIps();
+
+    // Формирование состояний отдельных IP
+    for (const auto& [ip, connected] : ip_status) {
+        IpState state;
+        state.connected = connected;
+        state.last_change = std::time(nullptr);
+        state.is_group = false;
+        current_states[ip] = state;
+    }
+
+    // Проверка групп IP и формирование групповых состояний
+    for (const auto& [group_node, group_data] : ip_groups) {
+        const auto& [ips, logic] = group_data;
+        bool group_result = (logic == "AND");
+
+        for (const auto& ip : ips) {
+            auto it = ip_status.find(ip);
+            bool connected = (it != ip_status.end() && it->second);
+
+            if (logic == "AND") {
+                group_result &= connected;
+            } else { // OR
+                group_result |= connected;
+            }
+        }
+
+        IpState group_state;
+        group_state.connected = group_result;
+        group_state.last_change = std::time(nullptr);
+        group_state.is_group = true;
+        group_state.group_node = group_node;
+        group_state.type = "BOOL";
+        current_states[group_node] = group_state;
+    }
+
+    return current_states;
+}
+
+
+std::map<std::string, AvDiagnostics::IpState> AvDiagnostics::detectIpChanges() {
+    std::map<std::string, IpState> changes;
+
+    for (const auto& [node, state] : current_ips_) {
+        if (!last_sent_ips_.count(node) || last_sent_ips_[node].connected != state.connected) {
+            changes[node] = state;
+        }
+    }
+
+    last_sent_ips_ = current_ips_;
+    return changes;
+}
+
+
+void AvDiagnostics::sendIpMetrics(OpcUaClient& opcClient, std::map<std::string, IpState>& changes) {
+    std::vector<OpcUaClient::WriteConfig> writeConfigs;
+
+    for (const auto& [node, state] : changes) {
+        if (!state.is_group) continue;
+
+        OpcUaClient::WriteConfig cfg;
+        cfg.node_id = node;
+        cfg.type = state.type;
+
+        if (state.type == "BOOL") cfg.value.b = state.connected ? 1 : 0;
+        else if (state.type == "INT") cfg.value.i = state.connected ? 1 : 0;
+        else if (state.type == "STRING") cfg.value.s = state.connected ? "true" : "false";
+        cfg.type = "BOOL";
+        writeConfigs.push_back(cfg);
+    }
+
+    if (!writeConfigs.empty() && opcClient.CheckConnection()) {
+        opcClient.Write(writeConfigs);
+    }
+}
+
+// Guardant ----------------

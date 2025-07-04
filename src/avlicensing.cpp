@@ -143,3 +143,5 @@ int AVLicensing::Checker(grd_uint32 FEATURE_ID)
     // std::cout << "Проверка лицензии успешна" << std::endl;
     return 0;
 }
+
+

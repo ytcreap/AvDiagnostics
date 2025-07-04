@@ -30,8 +30,7 @@ public:
 
     struct RaidState {
         std::string status;
-        bool state;
-        double rebuild_percent;
+        bool is_ok;
     };
 
     struct RaidNodes{
@@ -40,6 +39,10 @@ public:
             std::string node_state;
             std::string type_state;
         };
+
+    struct RaidConfig {
+        std::map<std::string, RaidNodes> raid_configs;
+    };
 
 
     struct RamState {
@@ -125,10 +128,12 @@ public:
 
     struct IpState {
         bool connected;
-        std::time_t last_change;
-        bool is_group_result;
+        time_t last_change;
+        bool is_group;
         std::string group_node;
-        std::string value_type;
+        std::string type;
+        std::string logic;
+        std::vector<std::string> members;
     };
 
 
@@ -161,13 +166,13 @@ public:
 
     std::vector<CpuTimes> readCpuTimes();
 
-    std::vector<double> getCpuUsage();
+    std::vector<double> getCpuUsage(); // мб объединить две функции
 
-    std::map<std::string, int> collectCpuUsage();
+    bool collectCpuUsage();
 
-    bool checkForCpuChanges(const std::map<std::string, int>&);
+    bool checkForCpuChanges();
 
-    bool sendCpuUsage(OpcUaClient&, const std::map<std::string, int>&);
+    bool sendCpuUsage(OpcUaClient&);
 
     // Диски ---------------
 
@@ -247,16 +252,69 @@ public:
         return it != fs_types.end() ? it->second : "unknown";
     }
 
-    std::map<std::string, DiskUsageData> collectDiskUsage();
+    void collectDiskUsage(); // мб объединить две функции
     bool hasDiskChanged(const DiskUsageData&, const DiskUsageData&);
-    std::vector<std::pair<std::string, DiskUsageData>> findChangedDisks( const std::map<std::string, DiskUsageData>&);
+    std::vector<std::pair<std::string, DiskUsageData>> findChangedDisks();
     double convertUnits(uint64_t, const std::string&, int);
+    void sendFullDiskMetrics( OpcUaClient&, const std::vector<std::pair<std::string, DiskUsageData>>&, const std::map<std::string, DiskConfig>&);
 
+
+    // RAM ----------------------
+
+    void loadRamConfig();
+    RamState collectRamUsage(); // мб объединить две функции
+    bool isRamChanged(const RamState&);
+    void sendRamMetrics(OpcUaClient&, const RamState&);
+
+    // Processes ----------------
+
+    void collectProcessStates();
+    bool detectProcessChanges();
+    void sendProcessMetrics(OpcUaClient&);
+
+    // RAID ---------------------
+
+    bool loadRaidConfig();
+    void collectRaidStates(); // мб объединить две функции
+    std::map<std::string, RaidState> detectRaidChanges();
+    void sendRaidMetrics(OpcUaClient&, const std::map<std::string, RaidState>&);
+
+    // IP -----------------------
+
+    std::map<std::string, bool> loadIps();
+    std::map<std::string, AvDiagnostics::IpState> collectIpStates();
+    std::map<std::string, IpState> detectIpChanges();
+    void sendIpMetrics(OpcUaClient&, std::map<std::string, IpState>&);
+
+    // Guardant -----------------
+
+    // Как есть так и добавить
+
+    // Переменные ---------------
 
     std::map<std::string, NodeInfo> cpu_nodes_;
     std::map<std::string, int> last_sent_cpu_usages_;
+    std::map<std::string, int> current_cpu_usages_;
+
     std::map<std::string, DiskConfig> disk_configs_;
     std::map<std::string, DiskUsageData> last_sent_disk_usage_;
+    std::map<std::string, DiskUsageData> current_disk_usage_;
+
+    RamNodes ram_config_;
+    RamState last_sent_ram_;
+
+    std::map<std::string, ProcessState> last_sent_process_states_;
+    std::map<std::string, ProcessState> current_process_states_;
+
+    RaidConfig raid_config_;
+    std::map<std::string, RaidNodes> raid_configs_;
+    std::map<std::string, RaidState> last_sent_raids_;
+    std::map<std::string, RaidState> current_raids_;
+
+    std::map<std::string, AvDiagnostics::IpState> ip_configs_;
+    std::map<std::string, AvDiagnostics::IpState> current_ips_;
+    std::map<std::string, AvDiagnostics::IpState> last_sent_ips_;
+
 private:
     tinyxml2::XMLDocument doc_;
 
