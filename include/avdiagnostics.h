@@ -137,14 +137,12 @@ public:
     };
 
 
-    AvDiagnostics()
-    {
+    AvDiagnostics() {
         // конструктор
 
     }
 
-    ~AvDiagnostics()
-    {
+    ~AvDiagnostics() {
         // Деструктор
         //
         //  Отключение от opc
@@ -163,15 +161,10 @@ public:
     // CPU -----------------
 
     bool loadCpuConfig();
-
     std::vector<CpuTimes> readCpuTimes();
-
-    std::vector<double> getCpuUsage(); // мб объединить две функции
-
+    std::vector<double> getCpuUsage(); // мб объединить две функции TODO
     bool collectCpuUsage();
-
     bool checkForCpuChanges();
-
     bool sendCpuUsage(OpcUaClient&);
 
     // Диски ---------------
@@ -252,17 +245,17 @@ public:
         return it != fs_types.end() ? it->second : "unknown";
     }
 
-    void collectDiskUsage(); // мб объединить две функции
+    void collectDiskUsage(); // мб объединить две функции TODO
     bool hasDiskChanged(const DiskUsageData&, const DiskUsageData&);
     std::vector<std::pair<std::string, DiskUsageData>> findChangedDisks();
     double convertUnits(uint64_t, const std::string&, int);
-    void sendFullDiskMetrics( OpcUaClient&, const std::vector<std::pair<std::string, DiskUsageData>>&, const std::map<std::string, DiskConfig>&);
+    void sendFullDiskMetrics( OpcUaClient&, const std::vector<std::pair<std::string, DiskUsageData>>&);
 
 
     // RAM ----------------------
 
     void loadRamConfig();
-    RamState collectRamUsage(); // мб объединить две функции
+    RamState collectRamUsage(); // мб объединить две функции TODO
     bool isRamChanged(const RamState&);
     void sendRamMetrics(OpcUaClient&, const RamState&);
 
@@ -275,7 +268,7 @@ public:
     // RAID ---------------------
 
     bool loadRaidConfig();
-    void collectRaidStates(); // мб объединить две функции
+    void collectRaidStates(); // мб объединить две функции TODO
     std::map<std::string, RaidState> detectRaidChanges();
     void sendRaidMetrics(OpcUaClient&, const std::map<std::string, RaidState>&);
 
