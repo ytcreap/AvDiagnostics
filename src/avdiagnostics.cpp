@@ -854,3 +854,4 @@ void AvDiagnostics::sendIpMetrics(OpcUaClient& opcClient, std::map<std::string, 
 
 // Guardant ----------------
 
+// изменить
